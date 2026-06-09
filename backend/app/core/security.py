@@ -8,7 +8,7 @@ def mask_api_key(key: str) -> str:
     """对 API Key 进行脱敏处理
 
     示例:
-        sk-909672c3c52e47699b96d18c5386a398 -> sk-****a398
+        sk-1234567890abcdef1234 -> sk-1234
     """
     if not key or len(key) <= 7:
         return "****"
