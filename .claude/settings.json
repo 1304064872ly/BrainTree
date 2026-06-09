@@ -1,0 +1,9 @@
+{
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
+  },
+"env": {
+    "DISABLE_AUTOUPDATER": "1",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER":"0"
+  }
+}

@@ -1,0 +1,395 @@
+JUC相关内容前置回顾
+	1,进程和线程
+		进程: 正在进行中程序 eg QQ 微信
+		线程: 进程中一个不可分割的执行单元 QQ中的语言聊天功能--线程  文件上传--线程
+		关系: 一个进程中至少包含一个线程
+	2,多线程和多进程意义:
+		充分利用服务器的cpu资源 线程与内存关系不大
+	3,回顾线程创建方式
+		1,继承Thread基类
+		2,实现Runnable接口
+		注意事项:
+			1,start方法只能调用第一次,如果要是多次调用会抛出异常 IllegalThreadStateException
+			2,run方法可以调用多次,并无真正的实际使用意义
+	4,虽然现在很多项目的jdk版本是jdk17或者21,但是在面试的是依然会被问到jdk8新特性 
+		1,lambda表达式
+			作用: 快速创建一个接口的实例对象
+			前提: 该接口是一个函数式接口---有且仅有一个抽象方法
+			写法: 拷贝小括号 写死右箭头 落地大括号
+		2,Stream流程
+		3,接口中方法实现(允许默认和静态方法体)
+	5,回顾synchronized--隐式锁 悲观锁 "重(zhong)锁" 可重入锁 互斥锁 非公平锁
+		锁: 用来解决线程安全问题
+		线程安全问题产生原因:
+			1,多线程操作共享资源
+			2,操作共享资源的代码有多行
+		卖票案例: 3个窗口销售30张票
+			技巧: 线程 操作 资源类
+		扩展:
+			synchronized是否重入: 支持 --------避免死锁
+			所谓重入指的是同一个线程对一个锁可以多次获取
+			如果是不同的线程对同一个锁多次获取就大概率会产生死锁
+			目的: 有效避免死锁
+		底层:
+			同步代码块 
+				monitorenter 和 monitorexit  管程 
+				javap -c 反编译命令查看字节码文件信息
+				monitor 保存在对象的对象头中(与对象内存布局有关)
+			同步方法
+				是通过 ACC_SYNCHRONIZED 标识来表名这是一个同步方法
+				javap -v 获取更详细的字节码信息
+		8锁问题
+			本质是分析 多线程环境下执行业务的时候是否是同一把锁 (static类锁和对象锁)
+			如果是同一把锁 就需要等待 否则不需要等待
+		如果是同一个对象锁的情况下,我把sleep方法换成了wait方法 结果会有所不同
+			相同点: 都会阻塞线程
+			不同点:
+				sleep: 抱着锁睡觉 短信方法在通过sleep休眠的过程中不会释放锁 
+					   属于Thread类的静态方法
+				wait: 等待的时候就会释放锁 意味着短信方法会释放锁 邮件方法对应的线程就会抢到锁 
+				      属于Object方法
+		死锁:
+			死锁案例: 
+				表象: 锁嵌套
+				原因: 
+					互斥--(锁天然具备的特性)
+					占有且等待
+					不可剥夺
+					循环等待
+				最终效果--死锁
+					- 线程1获取R1锁没有释放，然后尝试获取R2锁
+					- 线程2获取R2锁没有释放，然后尝试获取R1锁
+			检测死锁
+				命令
+					jps
+					jstack -l pid
+				jvm的内存诊断工具
+					jconsole.exe工具
+					jvisualvm.exe
+			预防死锁		
+JUC相关内容
+	Lock接口
+		lock()--上锁
+		unlock()--释放锁
+		实现类: ReentrantLock ReentrantReadWriteLock
+	ReentrantLock类--可重入锁
+		1,快速入门案例--重点用法
+			ReentrantLock lock = new ReentrantLock()
+			lock.lock()
+			try{
+				// 编写逻辑代码
+			}finally{
+				lock.unlock()
+			}
+		2,是否是公平锁
+			概念:
+				公平锁: 先来后到 T1 T2 T3 -->执行的顺序一定是T1先执行 T2 次之 T3最后执行
+				非公平锁: 凭本身抢夺cpu执行权 T1先来的但是T3先执行
+			分别测试synchronized和ReentrantLock到底是公平的还是非公平锁的?
+				synchronized一直都是非公平锁
+				ReentrantLock
+					默认是非公平锁
+					可以通过制定new ReentrantLock(true)变为公平锁
+		3,读写锁
+			多线程并发环境中: 读读并发 读写不可并发 写写不可并发
+			读锁:
+				ReentrantReadWriteLock.readLock.lock() 
+				ReentrantReadWriteLock.readLock.unlock()
+			写锁
+				ReentrantReadWriteLock.writeLock.lock() 
+				ReentrantReadWriteLock.writeLock.unlock()
+		4,老版的线程通信案例: wait() notify() notifyAll()
+			线程编码的口诀:
+				1,线程 操作 资源类
+				2,判断 干活  通知
+		5,新版的线程通信案例---Condition
+			ReentrantLock lock = new ReentrantLock()
+			Condition condition = lock.newCondition()
+			condition.await()  --等待
+			condition.signal() --唤醒
+	并发容器(集合)类
+		ArrayList--ConcurrentModificationException 
+			线程不安全有两点
+				1,多线程下向集合中添加元素
+					解决方案: Vector
+							CopyOnWriteArrayList
+				2,迭代器遍历List的过程中 通过list.add方法向集合添加元素
+					解决方案   ListIterator 通过该迭代器提供的add方法实现向集合中添加元素的操作[a,b,c,d]
+							 CopyOnWriteArrayList    							 [a,b,d,c]
+			CopyOnWriteArrayList
+				写时复制技术 底层依赖的ReentrantLock
+			fail-fast: 快速失败,一定发现在遍历集合的过程中 add或者Remove了集合的元素,会快速失败,保证数据完整性
+			fail-safe: CopyOnWriteArrayList典型的safe实现	
+		HashMap--线程不安全
+			HashTable-线程安全
+	JUC强大的工具类
+		1,CountDownLatch 减少计数器
+			经典案例: 教室中有六个人 这六人全部离开教室之后,管理员锁门
+		2,CyclicBarrier 循环栅栏
+			经典案例: 6个人全部到齐之后,我们要开会
+		3,Semaphore 信号量
+			经典案例: 3个车位6辆车
+	Callable
+		Therad thread = new Thread()
+		()小阔号中可以接受一个Runnable类型的参数,但是MyCallable可不是Runnable类型的
+		由于Runnable接口有一个孙子FutureTask 它就可以放在小括号中,巧的是new FutureTask(new MyCallable())
+		综上: 就是通过以上方式创建一个实现了Callable接口的线程对象的
+	异步编排:
+		1,先创建异步任务
+			创建一个无返回值的异步任务  runAsync(Runnable,ThreadPool)
+			创建一个有返回值的异步任务  supplyAsync(suppler,ThreadPool)
+		2,编排异步任务
+			结果处理
+				thenRunXXX
+					这个异步任务既不接收值,也不返回值
+				thenAcceptXXX
+					这个异步任务可以接收,但是不返回值
+				thenApplyXXX
+					这个异步任务既可以接收值,也可以返回值
+			异常处理
+				exceptionally 仅在发生异常时触发
+				handle 无论成功与否都会被执行
+			多任务组合:
+				allof 所有给定的CompletableFuture都完成时被触发
+				anyof 任意一个CompletableFuture都完成时都可以触发
+	阻塞队列(BlockingQueue接口)
+		本质是一个集合 BlockingQueue是父接口是Collection接口
+		BlockingQueue接口的常用的实现类
+			ArrayBlockingQueue 数组
+			LinkedBlockingQueue 链表
+		API(三组)
+			第一组: 抛出异常的 add remove element
+			第二组: 特殊值  offer poll peek
+			第三组: 阻塞
+				put() 存元素 如果队列没满,可以进队,如果队列满了,既不会报错也不会抛弃数据,而是阻塞 知道队列腾出空间
+				take() 取元素 有就可以取,没有就阻塞 直到队列中存入了新的数据			
+	线程池:	
+		你对线程池的理解?
+			池化技术 资源复用思想
+		你用的是什么线程池?
+			newCachedThreadPool()-->说明 会有OOM风险 原因救急线程的数量是2的31次方-1 很大 一般不用
+				(0,Integer.MAX_VALUE,60L,TimeUnit.SECONDS,new SynchronousQueue<Runnable>())
+					0: 核心线程数 也叫作常驻内存数
+					Integer.MAX_VALUE: 
+						表示是最大线程数 触发创建救急线程的条件是核心线程数用完了,且阻塞队列也满了
+						细化: 根据案例得出的结果 最大线程数 = 核心线程数+救急线程
+					60L: 救急线程的过期时间
+					TimeUnit.SECONDS: 救急线程的过期时间的单位
+					new SynchronousQueue<Runnable>(): 阻塞队列
+					以上5个是显示定义 还有两个参数使用的是默认的值
+						线程工厂
+						拒绝策略
+				工作流程: 
+					来了任务之后,先看核心线程数是否够用,如果够用,直接获取线程对象执行任务
+					如果核心线程数不够了,此时会将任务保存在阻塞队列中进行暂存
+					如果阻塞队列也满了,此时就会触发创建救急线程
+					细化: 根据案例得出的结果 最大线程数 = 核心线程数+救急线程
+					如果救急线程也不够了,此时线程池就会触发的默认的拒绝策略(拒绝任务并抛出异常)
+					如果创建了救急线程且任务也执行完毕了,救急线程会在过期时间到了之后,会被销毁 原因就是线程属于大对象,会有OOM风险
+					如果常驻内存中线程所对应的任务执行完毕了,线程不会被销毁,而是放回池中,等待下次使用
+			newFixedThreadPool(3)--说明 会有OOM风险 原因阻塞队列的长度是2的31次方-1 很大 一般不用
+					nThreads--3:核心线程数 也叫作常驻内存数
+					nThreads--3:
+						表示是最大线程数 触发创建救急线程的条件是核心线程数用完了,且阻塞队列也满了
+						最大线程数 = 核心线程数+救急线程
+					0: 救急线程的过期时间
+					TimeUnit.SECONDS: 救急线程的过期时间的单位
+					new LinkedBlockingQueue<Runnable>() ---队列长度是 2的31次方-1 有OOM风险
+			newSingleThreadExecutor()
+				核心=救急 = 1
+				阻塞队列使用的是LinkedBlockingQueue<Runnable>() ---队列长度是 2的31次方-1 有OOM风险
+		线程池工作原理 见上面的工作流程
+		线程池参数 一共是7个
+			corePoolSize ---------------------------核心线程数 也叫作常驻内存 
+			maximumPoolSize-------------------------最大线程数据=核心线程数+救急线程 当阻塞队列满的时候才会触发
+			keepAliveTime---------------------------救急线程存活时间 救急线程执行完任务之后需要清理掉
+			unit------------------------------------救急线程存活时间单位
+			workQueue-------------------------------阻塞队列
+            Executors.defaultThreadFactory()--------线程工厂 一般使用默认即可
+			RejectedExecutionHandler----------------拒绝策略
+		参数如何如何指定
+			拒绝策略:RejectedExecutionHandler 有几个呢?
+				AbortPolicy 
+					英文: A handler for rejected tasks that throws a RejectedExecutionException
+					中文: 拒绝任务并抛出异常
+					使用场景: 适合查询业务 100人查数据,会有一部分人查不到,此时不管了 
+				DiscardPolicy
+					英文: A handler for rejected tasks that silently discards the rejected task.
+					中文: 拒绝任务不抛异常
+				DiscardOldestPolicy
+					中文: 拒绝等待时间最久的任务  其他任务retries
+				CallerRunsPolicy
+					中文: 不会拒绝任何一个任务 做法就是通过 调用主程序来执行任务
+						 缺点: 如果现在主程序正在执行一个非常重要的任务,会严重影响主程序的正常执行效率
+					使用场景: 适合写数据的场景 保证数据的完整性,慢一点没关系,可以接受
+				自定义拒绝策略:
+					如果是查询业务: 我自己编写一个拒绝策略 可以自定义重试策略
+					如果是写业务:   我自己编写一个拒绝策略 可以自定义重试策略
+		动态线程池:
+			线程池提供了针对核心参数的set方法, 将来就可以借助于第三方的配置中心实现配置信息的动态化
+			 threadPool.setCorePoolSize();
+			 threadPool.setMaximumPoolSize();
+			 threadPool.setRejectedExecutionHandler();
+			可以将如下参数输出到日志中,将来可以利用日志工作查看此时此刻的线程池配置是否满足当下的业务场景
+				threadPool.getCorePoolSize();
+				threadPool.getMaximumPoolSize();
+				threadPool.getTaskCount();....
+	JMM
+		了解: 在cpu与内存之间 存在 一个缓冲区 目的是为了匹配二者之间运行速度不一致的问题
+		JMM是什么: java memory model
+			它规定了线程如何通过主内存进行交互 线程安全问题
+			JMM是JVM中对于线程安全保障的一种规范(接口)
+		JMM为什么-底层原理
+			JMM保证三大特性 
+				原子性:通过synchronized和Lock保证 多线程并发操作不可分割
+				可见性 MESI协议 基于硬件的一个一致性协议 主内存与线程的工作内存之间的一致性
+				有序性 内存屏障 可以通过synchronize和volatile来实现禁止指令重排
+		JMM如何使用(实现类)
+			synchronized
+			Lock
+			volatile 中文翻译: 不稳定的
+	volatile 不稳定的
+		volatile是什么
+			JMM规范的一种实现 即是一种轻量级的同步机制 所谓轻量的一种理解就是不保证原子性
+			只保证有序性和可见性
+		volatile为什么(原理)
+			可见性 MESI协议 基于硬件的一个一致性协议 主内存与线程的工作内存之间的一致性
+			有序性 内存屏障 可以通过synchronize和volatile来实现禁止指令重排
+		volatile怎么用
+			volatile 只能修饰变量 不能修饰方法
+			需要注意的是synchronized 不能修饰变量 它可以修饰方法和代码块
+			为了解决volatile不保证原子性的缺陷,可以使用原子类 原子类的底层是CAS
+	CAS
+		CAS是什么
+			是compareAndSwap的简称  意为 比较并交换
+			如果旧值相同,就会向新值替换为旧值 
+		CAS为什么(原理)
+			底层原理与Unsafe有关
+			步骤:
+				第一步: 获取要修改属性的偏移量
+				第二步: 通过Unsafe类提供的compareAndSwapXXX(要修改的对象,属性偏移量,旧值,新值)
+				第三步: 如果给定的旧值元原先的旧值匹配 才会将新值替换为旧值 否则不做任何修改也不会报错
+		CAS怎么用
+			我们需要模仿原子类AtomicInteger写一个原子类的操作
+		经典问题 ABA问题
+			T1----->10--执行的时间比较长->20
+			T2----->10-->15 15-10
+			解决思路: 版本号 使用的带版本号的原子类 AtomicStampedReference(原始值,原始版本)
+					原理: 该原子类的方法 compareAndSet(旧值,新值,旧版本号,旧版本号+1)
+					      通过判断版本号是否匹配,如果配置方法执行返回值为true表示修改成功 否则修改失败
+	JDK8为例
+	AQS是整个JUC工具包的基石
+		回顾我们前面几天学习过的juc工具类: 
+			ReentrantLock CountDownLatch CyclicBarrier Semaphore
+		AQS是什么
+			AbstractQueuedSynchronizer 简称抽象队列同步器
+			组成:
+				rely on first-in-first-out (FIFO) wait queues      先进先出的CLH等待队列  
+				The wait queue is a variant of a "CLH"				
+				rely on a single atomic int value to represent state  被volatile修饰的一个statet 底层是通过CAS保证原子性的
+				同步操作主要依赖对state值的修改 getState() setState() CompareAndSetState()
+				本质 state+1表示上锁 state-1表示释放锁
+			方法:
+				tryAcquire---定义上锁的逻辑
+				tryRelease---定义释放锁的逻辑
+				isHeldExclusively---判断是否持有锁
+				
+		AQS为什么(原理)
+			以ReentrantLock实现为例 学习AQS底层原理 
+			ReentrantLock.lock()
+				默认是非公平锁
+				公平锁
+			ReentrantLock.unlock()
+				公平和非公平锁用的是同一套逻辑
+		AQS怎么用
+			ReentrantLock
+				它的一个内部类同步器类继承了AQS   Sync extends AbstractQueuedSynchronizer
+			CountDownLatch
+				它的一个内部类同步器类继承了AQS   Sync extends AbstractQueuedSynchronizer
+			CyclicBarrier
+				它没有内部类,但内部使用了ReentrantLock
+			Semaphore
+				它的一个内部类同步器类继承了AQS   Sync extends AbstractQueuedSynchronizer
+		详细话术
+		ReentrantLock底层实现
+			以下三个内部类都继承了AbstractQueuedSynchronizer 重写了tryAcquire 和 tryRealease
+			Sync
+				该内部类只重写了tryRealease方法,定义一个lock抽象方法,定义了一个nonfairTryAcquire通用方法
+				nonfairTryAcquire(int acquires)
+					1.获取当前线程对象,并获取了AQS中的状态位state值
+					2,如果state=0 cas操作将state设置为acquire,并记录当前线程获取到锁
+					3.如果state!=0 判断当前线程是否是有锁线程,如果是拥有锁的线程,则执行重入操作(state+acquire)
+				tryRelease(int releases)
+					1,获取state,执行state-acquire操作
+					2,判断当前线程是否是持有当前锁的线程,如果不是,说明你在准备释放别人的锁,抛出异常信息
+					3,判断state是否为0,如果为了,直接释放
+					4,如果state不为0,表示当前正处在可冲入状态,这把第一步的state值更新一下即可
+			NonfairSync
+				tryAcquire(int acquires) : 其实就是调用了他的父类NonfairSync的nonfairTryAcquire
+				lock()方法
+					1,线程先尝试获取锁,如果获取锁成功,就占用锁
+					2,获取锁失败,执行acquire方法
+						2.1 走tryAcquire获取锁
+						2.2 获取锁失败,把当前线程封装为node节点保存调用addwaiter()方法存入CLH队列
+						2.3,将node节点放到tail后面
+						2.4,中断当前线程
+			FairSync
+				tryAcquire(int acquires)
+					1,获取当前线程对象和state状态位的值
+					2,如果state=0时候
+						2.1判断等待队列,如果head=tail 说明只有一个线程获取锁,直接返回结果接口,表示获取锁成功
+						2.2如果head!=tail 获取下一个要获取锁的节点currentNode 如果该对象为空,则表示获取锁失败
+						2.3如果currentNode不为空,并且currentNode的线程等于当前线程,则表示获取锁成功
+						2.4如果currentNode不为空,并且currentNode的线程不等于当前线程,则获取锁失败
+					3,state!=0,判断当前线程是否是有锁线程,如果是有锁线程,值执行重入操作(state+acquire)
+		回顾:
+			线程状态: 创建---就绪-阻塞(睡眠和等待)--运行---销毁
+对象头(TODO)
+并行(TODO)
+偏向锁 轻量级锁(TODO)
+-------------------------面试中的问题-----------------
+1,线程创建方式有几种? 3+1
+	继承Thread基类 重写run方法
+	实现Runnable接口,重写run方法
+	实现Callable接口,重写call方法
+	线程池
+	继续补充:Callable相较于Runnable而言 他不仅有返回值,还能声明异常
+2,线程安全问题产生的原因以及解决?
+	synchronized 
+3,死锁问题
+4,Lock和Synchronized有什么区别?
+5,悲观锁和乐观锁
+	悲观锁: 线程每次在进行获取锁对象的时候,都悲观的认为当前锁正在被某一个线程持有,所以每次都需要对判断锁的状态
+	乐观锁: 线程每次在进行获取锁对象的时候,都乐观的任务当前锁没有被任何一个线程持有,先执行后判断
+6.Object有几个方法? 龙生九子
+	hashCode() equals() toString() clone() getClass() wait() notify() notifyAll() finalize()
+7,手撕代码题: 编写线程通信案例--数马为例
+8,集合线程不安全的体现
+9异常体系中的 throws 和 throw 区别
+10.方法的重载和方法覆盖区别
+	前提: 前者同一个类 后者一定要有子父类继承关系
+	相同: 方法名都是相同
+	不同之处:
+11.如何让线程有序执行
+	第一种方式: 
+		Condition condition1 = ReentrantLock.newCondition()
+		Condition condition2 = ReentrantLock.newCondition()
+		Condition condition3 = ReentrantLock.newCondition()
+	第二种方式:
+		Thread1.join()
+		Thread2.join()
+		表示线程2一定是在线程1执行结束之后执行
+	
+
+		
+
+
+
+
+
+
+
+
+
+
+	

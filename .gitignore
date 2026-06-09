@@ -1,0 +1,40 @@
+# 依赖
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+.env
+
+# 构建产物
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
+logs/
+
+# 上传的文件
+uploads/
+temp/
+
+# 数据库
+*.db
+*.sqlite
+*.sqlite3

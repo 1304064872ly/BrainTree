@@ -1,0 +1,411 @@
+MySQL高级--性能调优
+	环境准备
+		1,准备linux 提前安装一台空的centos系统的虚拟机 以此做为模板机 后续的MySQL服务器通过模板机进行克隆
+		2,启动并修改MySQL所在服务器的IP地址
+			vim /etc/sysconfig/network-scripts/ifcfg-ens33
+			并重启网卡
+			service network restart 
+		3,Windows本地通过连接工具finalShell xshell ....用新修改的IP地址连接linux
+		4,安装docker环境
+			注意事项: yum源是灵活的
+		5,安装MySQL--为了练习docker命令以及规避下载慢的问题
+				镜像--->tar
+					docker save -O xxx xxx.tar
+				tar--->镜像
+					docker load -i tar名称 
+			资料中有tar
+				查看当前docker引擎中有哪些镜像
+					docker images
+				启动docker
+					docker run -d -p3309:3306
+			-v 表示宿主机与docker的数据卷挂载 可以理解为Windows桌面的快捷方式
+			   在修改配置文件的时候,不需要每次都要进入容器 通过指定这种挂载只需要在宿主机进行修改就可以自动映射到容器中了
+				docker exec -it 容器名 /bin/bash
+			查看当前容器中挂载信息
+				docker volume ls
+			查看某个具体的挂载信息
+				docker volume inspect 宿主上的挂载文件夹名称
+		6,测试MySQL连接
+			如果提示1251 只需要按照课件修改MySQL8的加密即可
+	关于大小写
+		Windows不区分
+		linux: 库名 表名 别名
+	批量导入数据
+		默认是关闭的,需要手动开启
+		load data local infile
+	sql_mode和字符集了解即可
+	MySQL逻辑架构:(☆☆☆☆☆)
+		第一步: 各大语言都会提供MySQL的连接工具 eg:JDBC
+		第二步: SQL接口: 接收用户输入的SQL语句(DML DDL)
+		第三步: 缓存层: 在5.7之前 是存在的,但是随着业务灵活度的不断增加,缓存命中率不高,在8.0版本之后取消了
+		第四步: 解析器: 最终将SQL语句解析成一棵 解析树
+		第五步: 查询优化器:是基于查询成本的优化，不是基于查询时间的优化
+		第六步: 引擎层: 类似于发动机,真正去磁盘上获取数据 常用的是myisam Innodb
+		第七步: 存储层: MySQL所有的数据都保存在磁盘上
+	存储引擎
+		Innodb 
+			在磁盘中的表现形式是 表名.ibd文件 包含数据 表结构 索引等数据
+			.ibd文件逻辑组成
+				tablespace(表空间 就是.ibd文件)
+					Segment(段)
+						extent(区): 每个区的大小是1M
+							page(页): 每个页的大小16KB 即一个区中有64个连续的页
+								row(行)
+									隐藏字段: trx_id roll_pointor 与MVCC严重有关
+	索引:
+		SQL预热
+			union和union all 区别
+				union: 合并多个select的结果 并去重
+				union all 合并多个select的结果 不去重
+		数据结构的演化
+			BST: 二叉查找数据
+				缺点: 在数据有序的情况下,会称为一个链表,"瘸腿"
+			AVLTree: 自平衡查找树
+				相较于BST,会进行自平衡
+				缺点:  一个节点只能保存一个页(16KB) 将来在进行数据检索的时候,出现大量的磁盘IO操作
+			B-Tree
+				多路平衡查找数据
+				相较于AVLTree,一个页面可以保存多个页 以磁盘块的形式进行存储 每个磁盘块包含
+					1,主键
+					2,指向下一个节点的指针
+					3,数据
+				缺点: 如果一行数据过大,导致磁盘块加载的数据变少
+			B+Tree:
+				多路平衡查找数据
+				相较于AVLTree,一个页面可以保存多个页 以磁盘块的形式进行存储 每个磁盘块包含
+					1,主键
+					2,指向下一个节点的指针
+					3,数据下移,即整行数据都记录在了叶子节点中,并且还是有序的,通过双向链表进行关联 更适合范围查找
+				使用经验:
+					B+Tree 树高一般是三层 三层的时候一张表中可以存放2200万数据约等于2000W 会产生2次IO(根节点常驻内存)
+					如果超过2000W 通过创建索引进行优化的时候效果就不明显,此时需要通过分库分表来进行物理优化
+			聚簇索引和非聚簇索引:
+				聚簇索引就是主键索引 也叫聚集索引
+				非聚簇索引除了主键索引至外地其他索引 也叫非聚集索引 也叫二级索引 也叫作辅助索引
+			回表:
+				如果查询语句中条件 使用的是非聚簇索引 那么在真正获取数据的时候,会先获取改行记录的主键
+				在通过主键获取一整行记录  这就是回表
+				如果查询条件就是聚簇索引 即逐渐,此时就不需要回表,因为可以通过条件直接获取到一整行数据
+		explain:
+			作用: 模拟SQL优化器 查看具体SQL的执行计划
+			取值:
+				id: 表示为了获取数据所需要查询的次数/趟数
+				select_type: 查询的类型 Simple.....
+					union和union all
+				table: 当前查询所对应数据库表
+				type(☆☆☆☆☆): 为了获取数据 SQL的查询方式	
+					推荐取值: range<ref<eq_ref (☆☆☆☆☆)
+					最不推荐值: ALL 表示为了获取数据要扫描整张表,性能很差 需要优化
+					其他的值: const system
+				possible_keys: 列举查询字段中所包含的所有索引信息 但是这些索引不一定真正使用到
+				key: 真正用到的索引信息
+				key_len: 索引的利用率 主要针对的是联合索引
+				ref: 表示连接操作中使用的索引列
+				rows: 表示为了获取结果要扫描的表中记录的记录数  扫描的数据量越少越好 是一个估值
+				extra: 额外信息 主要是分组(group by)和排序(order by) 与回表相关的一些操作
+					----以下重要 务必掌握-------
+					using filesort:  不好
+						表示对查询结果的排序是通过磁盘的排序算法进行的
+							磁盘的排序算法有两种 第一种是单路排序 第二种双路排序
+						如果一旦出现using filesort 表示排序字段没有用到索引
+							是可以考虑优化 优化思路就是在排序字段上添加索引
+					using index:    好
+						表示使用了覆盖索引 可以避免回表
+						可以直接通过索引获取到数据 无需再次根据主键id获取一整行记录
+					using where:  不好
+						表示 where条件中的字段没有用到索引
+					using index Condition:  好
+						概念: 索引下推 简称 ICP 默认是开启状态
+							 所谓下推 指的是将扫描数据的操作下推到数据的存储引擎层
+						作用: 减少回表次数
+						前提: 使用了联合索引 比如我在三个字段上加一个索引 
+						举例: 三个字段a b c  创建一个 idx_a_b_c
+						
+					----以下了解-----
+					Using temporary:
+						分组和排序同时存在,且作用在不同的字段上 就会出现该信息
+					impossible where
+						where条件语句中结果始终是false	
+		哪些场景中可以创建索引:
+			自增主键 默认就是主键索引
+			频繁作为查询条件的字段------规避extra中using where
+			关联查询的时候关联字段需要创建索引-----  type=eq_ref   select * from t1,t2 where t1.id = t2.id
+			关于创建的是单值索引还是组合索引? 组合索引性价比更高
+				单值索引: 索引覆盖的列只有一个  eg 一张表5个字段 id a b c d  创建一个索引idx_a -->a字段
+				组合索引: 也叫作复合索引       eg 一张表5个字段 id a b c d  创建一个索引idx_a_b_c -->abc字段
+			分组和排序字段中也可以加索引
+			select 字段 from 表名 where 条件 group by 字段1 order by 字段2
+				查询字段 条件字段 分组排序字段
+		哪些场景不适合添加索引
+			表记录太少
+			表写操作频繁
+			过滤性不好的字段不适合建索引
+				"过滤性不好"指的是字段值的区分度低，即该字段的不同值较少或重复值较多
+					高过滤性字段如手机号、身份证号，每个值唯一对应少量记录，通过索引可快速定位数据
+				    而低过滤性字段如"性别=男"可能返回数百万条记录，索引效果有限
+				
+		索引调优案例
+			单表案例--单值索引
+				1,如果索引列中出现 %123 索引失效 即 %在左边
+				2,添加索引的字段上做函数操作
+				3,查询条件使用!=
+				4,is null 索引不失效使用了索引下推   
+				  is not null失效 原因在于MySQL查询优化器任务null值的比例不够高,通过调整null值比例 有可能会用到索引
+				5.字符串不加单引号会导致索引失效 会自动进行类型转换
+			单表案例--组合索引
+				create index idx_age_deptId_name on emp(age,deptId,name)
+				全值匹配
+					情况1: ----会走索引 查询优化器底层会自动进行排序
+						SELECT * FROM emp WHERE age=30 and deptId=1 and name='abc'; ----会走索引
+						explain SELECT * FROM emp WHERE age=30 and deptId=1 and name='abc';  ----会走索引
+						explain SELECT * FROM emp WHERE deptId=1 and age=30 and name='abc'; ----会走索引
+						explain SELECT * FROM emp WHERE name='abc' and age=30 and deptId=1 ; ----会走索引
+				最左匹配
+					情况1: 查询优化器只看索引的第一个字段有还是没有 如果有,但是顺序不一致 没关系 交给优化器他自己回调
+														    如果没有,索引就会失效 为什么
+						explain SELECT * FROM emp WHERE age=30 and deptId=1;
+						explain SELECT * FROM emp WHERE deptId=1 and name='abc'; ----索引失效
+						组合索引失效原理: 
+							deptId有序的前提是age有序  name有序的前提是deptId有序
+						explain SELECT * FROM emp WHERE age=1 and name='abc';   ---会走索引 利用率不高
+						explain SELECT * FROM emp WHERE name='abc' and age=1;    ---会走索引 利用率不高
+							分析: 由于name有序的前提是deptId有序 但是条件中并没有deptId explain结果key_len = 5
+						explain SELECT * FROM emp WHERE deptId=30;                 ----索引失效
+						explain SELECT * FROM emp WHERE name='';                   ----索引失效
+				
+				where中出现了OR 索引失效
+						explain SELECT * FROM emp WHERE age=30 and deptId=1 OR name='abc';  ---失效
+				范围条件查询右边的列索引失效 但是条件字段本身不失效
+						explain SELECT * FROM emp WHERE age=30 and deptId>10000 and name='abc';--部分失效
+			关联查询案例
+				1,将索引建立在被驱动表 驱动表尽量是小表 如果是左外链接 左表就是驱动表 对于右外连接 右表就是驱动表
+					A left join B  A表就是驱动表 B表就是被驱动表
+					A right join B  B表就是驱动表 A表就是被驱动表
+				2,使用子查询会增加获取数据的趟数 explain的id会增加
+				3,关联查询的时候,去重字段尽量添加索引
+				4,索引尽量建在被驱动表上
+			子查询:
+				尽量不要使用not in  或者 not exists 
+			排序查询orderby
+				1,无过滤,不索引  order by想使用索引，必须有过滤条件，索引才能生效  type=index
+				2,顺序错,不索引  eg: EXPLAIN SELECT * FROM emp WHERE deptid=45 ORDER BY age;   索引 idx_age_deptId_name
+				3,方向反,不索引  具体含义获取数据的方式依然会用到索引,但是排序的时候没有用索引
+				4,其他:
+					尽量避免select * 
+					sort_buffer_size: 这个参数表示比如总的数据量是10W 根据条件过滤之后剩下了1W数据 其中这1W条数据在排序之前是需要一个空间进行存储 这个空间
+									  就是sort_buffer 它的大小默认是1M
+					max_length_for_sort_data: 默认是4096 需要返回的列的总长度>该值 使用双路排序 否则使用单路排序
+			覆盖索引:
+				概念: 一个索引包含了满足查询结果的数据就叫做覆盖索引 
+				举例: idx_a_b_c
+				
+					select * from user where a="" and b="" and c="" 
+					
+					select a,b,c from user where a="" and b="" and c="" 
+					select a,b from user where a="" and b="" and c="" 
+					select a from user where a="" and b="" and c="" 
+				特殊使用场景:
+					深分页问题: 自关联子查询 子查询就是用来获取范围内的主键 得到一张临时表 x 
+					         临时表x与自身表通过主键进行关联 使用了覆盖索引 从而避免回表 		
+MySQL高级--日志
+	核心围绕 ACID mvcc redolog....
+	1,错误日志errorlog
+		工作流程: 以守护线程的方式进行工作
+		概念答疑: 关于守护线程
+			业务线程: 绝大部分使用的线程都是业务线程 
+			守护线程: 为了守护业务线程能够正常且顺利执行而存在的一类线程 eg: 垃圾回收线程  MySQL的错误日志线程
+					特点: 一旦业务线程执行完毕,守护线程也将随之结束 JVM不会单独运行守护线程
+			API:
+				Thread.setDeamon(true) 将一个线程指定设置为守护线程
+				Thread.isDaemon()  判断一个线程是否是守护线程
+	2,查询日志 querylog
+		记录所有MySQL查询操作
+	3,慢查询日志查询
+		[mysqld]
+		slow_query_log = 1  #开启
+		slow_query_log_file = /var/lib/mysql/slow-query.log   # 若没有指定，默认名字为hostname_slow.log
+		long_query_time = 1 # 将默认的10秒为慢 修改为1秒为慢
+		# 将没有使用索引的sql语句也会记录到日志中
+		log_queries_not_using_indexes = 1
+	4,binlog
+		记录MySQL写操作的日志 主要用于MySQL高可用 比如MySQL主从复制 从节点就是通过监听binlog日志完成从节点与主节点直接的数据一致性
+	5,事务特性ACID	
+		A: 原子性  事务是不可分割,要么都执行成功,要么都执行失败  insert undo log 日志文件保证原子性
+		C: 一致性  事务在修改之前和修改之后数据要保持一致性      update undo log 
+		I: 隔离性  事务之间不允许出现互相干扰的情况            锁
+		D: 持久性  事务一点提交,就会永久保存在数据中          redolog
+	6,redolog
+		是什么: 
+			重做日志 与数据库的写操作有关 具体指的是insert操作最终持久化到磁盘中有关 
+			组成: redolog_buffer  redolog_file
+		怎么用(流程)
+			insert操作之后,不会将数据立马写到磁盘上 而是先将数据写入到一个redolog_buffer中
+			redolog_buffer中的数据会按照一定的策略 将数据写入到redolog_file中
+			
+			这个策略就是刷盘策略 MySQL默认使用的策略值是1 官方提供的值有三个 分别是0,1,2
+				0: 每1S刷盘 
+				1: 只要commit操作就会刷盘
+				2: 交给OS刷盘
+		作用:
+			如果数据提交之后,数据库宕机了,数据不会丢失,原因在于数据会在redolog中保存一份
+	7,undolog--MySQL中的后悔药
+		是什么:
+			回滚日志 用于记录数据库中数据的修改操作
+			insert: 如果出现在新增过程中异常了,回滚的时候,将该数据清除
+			update: 每次修改数据的时候,会将原来的数据记录一下  作用就是mvcc
+					MVCC多版本并发控制--保证同时存在读写事务时候的情况下,读事务如何读取到最正确的那一条数据
+			分类:
+				update undolog ----不会立即删除,而是以版本链的形式存在,直到mvcc获取到真实想要的数据为止
+				insert undolog ----一旦事务提交insert undolog内容就会被清空
+		组成(了解)
+			undolog segment 回滚段 128个
+				undolog page 回滚页 1024页
+					row------> 该条记录曾经的数据
+		生命周期:
+			前置内容:
+				隐藏字段: trx_id 事务ID
+						roll_pointer 回滚指针 执行了过往一系列数据的一个指针
+						row_id: 隐藏主键,如果没有指定唯一主键 才会生效
+				
+	8,锁
+		保证事务的隔离性
+		问题:
+			脏读: 一个事务读取到了另外一个事务没有提交的数据
+			不可重复读: 两个事务,一个读(事务1) 一个写(事务2) 事务2在事务1两次读取前后修改了数据导致事务1两次读取结果不一致-----修改 
+			幻读/虚读: 两个事务,一个读(事务1) 一个写(事务2) 事务2在事务1两次读取前后新增或者删除了数据 导致事务1两次读取的数据多了或者少了 类似于产生了幻觉-----新增或删除
+		数据库是通过设置隔离级别:
+			读未提交: 无法解决任何问题 优点: 执行效率高
+			读已提交: Oracle数据库默认的隔离级别 可以解决脏读 
+			可重复读: MySQL默认的隔离级别 可以解决脏读 不可重复读 
+			串行化:   能够解决所有以上问题 缺点: 效率极低
+		场景:
+			读读场景: 可以允许并发
+			写写场景: 通过一个存在于内存中的锁结构保证安全 锁结构包含:
+					1,事务id 2,is_waiting(false可以进行写 true等待)
+			读写场景(MVCC):
+				RC隔离级别:同一个读事务每次查询操作会生成一个ReadView
+				RR隔离级别:同一个读事务每次查询操作会复用同一个ReadView(读视图)
+		锁分类:
+			从操作粒度:
+				表锁: 操作的时候,会锁定整张表
+				行锁: 操作的时候,会锁定当前行
+				间隙锁: 操作的时候,有范围条件的情况下 会将范围内的记录锁起来 < > <= >= between..and
+				意向锁(自动加): 解决表锁和行锁之间的兼容性冲突
+					本质上属于表级锁 当一个事务添加行锁的时候,会在表中自动添加意向锁
+					告诉系统当前事务对某一行添加了行锁,当其他事务在申请表锁的时候,
+					就不需要一行一行的进行检查
+			从操作类型
+				读锁(共享(shared)锁---S锁)
+				写锁(排它锁-----------X锁)--当执行写操作,Innodb会自动添加
+			意向锁和操作类型一般是同时存在
+				IS: 意向共享锁
+				IX: 意向排他锁
+				
+			操作效率
+				乐观锁: 每次执行之前都乐观的认为当前记录没有上锁 所有它每次执行都是先执行后判断 CAS
+					   实现: 在对应的数据库表中添加一个version版本号字段 每次执行前先判断该版本号
+						eg: 
+							SELECT version FROM example WHERE id = 1 FOR UPDATE; -- 获取当前版本号并锁定记录
+							UPDATE example SET data = 'new data', version = version + 1 WHERE id = 1 AND version = 0;
+				悲观锁: 每次执行之前都悲观的认为当前记录是上锁的 所有它每次执行都是判断后执行   synchronized lock
+					   实现  SELECT .... FOR UPDATE;
+		锁案例演示
+			行锁和表锁转换的演示
+				规则:
+					Innodb存储引擎中关于行锁和表锁的问题
+						如果执行条件中没有索引,此时默认是表锁
+						如果执行条件中使用了索引或者索引没有失效,此时就会将表锁优化成行锁
+			意向锁(表级别)演示
+				开启两个session 即两个窗口 分别将事务自动提交功能关闭
+				第一步: 意向锁是表级锁 不会阻塞行级锁
+					第一个窗口执行
+						update test_innodb_lock set sex = '8' where name='100'; 
+						分析:由于name字段的索引没有失效 因此name=100的这行记录上添加的是行锁 
+							在Innodb存储引擎中也叫作排他锁简称X锁 其实就是一个意向排他锁 (IX锁) 
+							所谓意向: 告诉整张表我想在name=100的这行记录上加排他锁(行锁)
+					第二个窗口执行
+						update test_innodb_lock set sex = '8' where name='700';
+						分析: 过程与第一个窗口完全相同
+				第二步:
+					在第二个窗口执行:
+						update test_innodb_lock set sex = '8' where name=600;
+						分析: 会阻塞,说明窗口1中的这个意向排他锁会导致当前的SQL语句未能只能
+						     同时也能证明意向锁是一个表级锁
+					
+		MVCC:
+			全程: 多版本并发控制 可以做到在并发读写的情况下无需加锁
+			     解决了在并发写场景中 读事务能够读取到它想要的那一条正确的数据
+			三要素:
+				隐藏字段:
+					Trx_id: 数据库会为每一个事务自动分配一个事务ID 自增的
+					Roll_pointer: 回滚指针 执行undolog版本链的指针
+					row_id: 如果建表的时候没有指定主键,row_id就是主键
+				undolog版本链
+					课件中图
+				ReadView--读视图
+					数据读取方式
+						当前读: 通过加锁方式实现
+						快照读: 无需加锁,它读取到的是undolog版本链中的数据
+					RW组成
+						m_ids 是一个数组[3,4,5] 表示活跃事务ID列表 所谓活跃事务就是开始执行但是没有提交的事务
+						min_trx_id: 活跃事务ID列表中最小的活跃事务id
+						max_trx_uid: 活跃事务ID下一个要分配的id 5+1
+						creator_trx_id: RW创建者事务的事务id
+MySQL高级--分库分表
+	一般情况下当数据量超过2000W的时候继续创建索引效果甚微,此时就需要通过分库分表的方式提高数据库的读写效率
+	主从集群
+		一主多从 一台MySQL主机 多态MySQL从机 主机负责数据的写入 从机负责数据的读取 从机利用主从复制原理不断的从主机更新数据
+		目的就是实现读写分离
+	分片集群
+		从数据库
+		从数据库表的角度
+		分片方式(以数据库表为例)
+			水平: 将一张大表拆分成两张一模一样的小表 这两个小表中的字段是完全一致的
+			垂直: 将一张大表拆分成两张子表 这两张子表中的字段是不相同 这两张子表通过一个逻辑外键进行关联
+	基于linux的docker搭建一主两从的MySQL集群
+	垂直分片案例
+	水平分片案例
+		如何避免由于数据分配不均导致的热数据集中的问题
+		
+	
+
+
+
+
+
+
+
+
+------------------------------------------------------------
+MySQL面试相关问题:
+	镜像和容器有什么区别?
+		镜像就是一个文件 镜像启动之后就是容器
+		镜像可以多次启动形成多个容器 但是在宿主机上的表示是通过指定不同端口号的方式进行提现
+	DDL DQL DML DCL 分别表示什么含义
+	MySQL中除了SQL语句的编写之外还需了解的内容 https://cloud.tencent.com/developer/article/1089722
+		存储过程
+			概念:存储过程将一些列的SQL语句统一执行的技术
+			调用 : CALL		
+		函数
+			概念: 类似 count() max() min() avg()... 这些都是sql函数
+			用法:
+				自定义MySQL函数
+		触发器 trigger  :
+			概念: 监视某种情况，并触发某种操作
+			
+		视图 view
+			 视图:是一个虚拟表，其内容由查询定义。同真实的表一样，视图包含一系列带有名称的列和行数据
+			 作用: 可以指定哪些数据可以被看到,哪些不能被看到 缺点: 不能添加索引进行优化
+			 适合: 表数据量不大 但又不经常发生变化的数据
+			 案例:
+				#创建视图 
+				create view lfyView  as  (select name,age from user)	
+				#使用视图
+				select * from lfyView
+				#修改视图
+				alter view lfyView AS (select name from user)
+				#删除视图
+				drop view lfyView
+	
+	
+	
