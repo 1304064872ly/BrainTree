@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react'
-import { Card, Button, Space, Typography, Empty, Spin, List, Tag, Select, Tooltip } from 'antd'
+import { Card, Button, Space, Typography, Empty, Spin, List, Tag, Select, Tooltip, Checkbox, Modal, message } from 'antd'
 import {
   ZoomInOutlined,
   ZoomOutOutlined,
@@ -8,9 +8,12 @@ import {
   QuestionCircleOutlined,
   FullscreenOutlined,
   FullscreenExitOutlined,
+  DeleteOutlined,
+  CheckSquareOutlined,
 } from '@ant-design/icons'
 import { useStore } from '../../stores'
 import { MindNode, MindTree } from '../../types'
+import { treeApi } from '../../services/api'
 import MarkdownRenderer from '../MarkdownRenderer'
 import './MindMap.css'
 
@@ -494,13 +497,17 @@ const ShortcutHint = () => (
 )
 
 const MindMap = () => {
-  const { trees, currentTree, setCurrentTree, loading } = useStore()
+  const { trees, currentTree, setCurrentTree, loading, removeTree } = useStore()
   const svgRef = useRef<SVGSVGElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [graphData, setGraphData] = useState<{ nodes: any[]; links: any[] }>({
     nodes: [],
     links: [],
   })
+  // 思维树列表多选状态
+  const [selectedTreeIds, setSelectedTreeIds] = useState<string[]>([])
+  // 简介折叠状态
+  const [descCollapsed, setDescCollapsed] = useState(false)
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(() => {
     // 从 localStorage 恢复展开状态
     if (currentTree) {
@@ -525,24 +532,9 @@ const MindMap = () => {
   const [draggingNode, setDraggingNode] = useState<string | null>(null)
   const [dragNodeStart, setDragNodeStart] = useState({ x: 0, y: 0 })
 
-  // 切换全屏
+  // 切换全屏 - 使用 CSS 模拟全屏
   const toggleFullscreen = useCallback(() => {
-    if (!document.fullscreenElement) {
-      containerRef.current?.requestFullscreen()
-      setIsFullscreen(true)
-    } else {
-      document.exitFullscreen()
-      setIsFullscreen(false)
-    }
-  }, [])
-
-  // 监听全屏状态变化
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement)
-    }
-    document.addEventListener('fullscreenchange', handleFullscreenChange)
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange)
+    setIsFullscreen(prev => !prev)
   }, [])
 
   // 根据选中的分类过滤节点和边
@@ -856,14 +848,91 @@ const MindMap = () => {
     )
   }
 
+  // 多选删除逻辑
+  const toggleSelectTree = (treeId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation()
+    setSelectedTreeIds(prev =>
+      prev.includes(treeId)
+        ? prev.filter(id => id !== treeId)
+        : [...prev, treeId]
+    )
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedTreeIds.length === trees.length) {
+      setSelectedTreeIds([])
+    } else {
+      setSelectedTreeIds(trees.map(t => t.id))
+    }
+  }
+
+  const handleBatchDelete = () => {
+    if (selectedTreeIds.length === 0) {
+      message.warning('请先选择要删除的思维树')
+      return
+    }
+
+    const count = selectedTreeIds.length
+    const names = trees
+      .filter(t => selectedTreeIds.includes(t.id))
+      .map(t => t.name)
+      .slice(0, 3)
+      .join('、')
+
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${count} 个思维树吗？\n${names}${count > 3 ? '...' : ''}`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          let successCount = 0
+          for (const treeId of selectedTreeIds) {
+            const response = await treeApi.delete(treeId)
+            if (response.success) {
+              removeTree(treeId)
+              successCount++
+            }
+          }
+          setSelectedTreeIds([])
+          message.success(`成功删除 ${successCount} 个思维树`)
+        } catch (error: any) {
+          message.error(error.message || '删除失败')
+        }
+      },
+    })
+  }
+
   // 如果没有选中思维树，显示思维树列表供选择
   if (!currentTree) {
     return (
       <div style={{ padding: '24px' }}>
-        <Title level={2}>思维图谱</Title>
-        <Text type="secondary" style={{ display: 'block', marginBottom: '24px' }}>
-          选择一个思维树来查看思维导图
-        </Text>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '24px' }}>
+          <div>
+            <Title level={2} style={{ margin: 0 }}>思维图谱</Title>
+            <Text type="secondary">选择一个思维树来查看思维导图</Text>
+          </div>
+          {trees.length > 0 && (
+            <Space>
+              <Button
+                icon={<CheckSquareOutlined />}
+                onClick={toggleSelectAll}
+              >
+                {selectedTreeIds.length === trees.length ? '取消全选' : '全选'}
+              </Button>
+              {selectedTreeIds.length > 0 && (
+                <Button
+                  danger
+                  icon={<DeleteOutlined />}
+                  onClick={handleBatchDelete}
+                >
+                  删除选中 ({selectedTreeIds.length})
+                </Button>
+              )}
+            </Space>
+          )}
+        </div>
 
         {trees.length === 0 ? (
           <Empty
@@ -883,22 +952,39 @@ const MindMap = () => {
               <List.Item>
                 <Card
                   hoverable
-                  onClick={() => handleSelectTree(tree)}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <Card.Meta
-                    avatar={<FileOutlined style={{ fontSize: '24px', color: '#1890ff' }} />}
-                    title={tree.name}
-                    description={
-                      <Space direction="vertical" size="small">
-                        <Text type="secondary">{tree.description || '暂无描述'}</Text>
-                        <Space>
-                          <Tag color="blue">{tree.nodes.length} 个节点</Tag>
-                          <Tag color="green">{tree.edges.length} 条连接</Tag>
-                        </Space>
-                      </Space>
+                  onClick={() => {
+                    if (selectedTreeIds.length === 0) {
+                      handleSelectTree(tree)
+                    } else {
+                      toggleSelectTree(tree.id)
                     }
-                  />
+                  }}
+                  style={{
+                    cursor: 'pointer',
+                    border: selectedTreeIds.includes(tree.id) ? '2px solid #1890ff' : '1px solid #f0f0f0',
+                  }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+                    <Checkbox
+                      checked={selectedTreeIds.includes(tree.id)}
+                      onClick={(e) => toggleSelectTree(tree.id, e)}
+                    />
+                    <div style={{ flex: 1 }}>
+                      <Card.Meta
+                        avatar={<FileOutlined style={{ fontSize: '24px', color: '#1890ff' }} />}
+                        title={tree.name}
+                        description={
+                          <Space direction="vertical" size="small">
+                            <Text type="secondary">{tree.description || '暂无描述'}</Text>
+                            <Space>
+                              <Tag color="blue">{tree.nodes.length} 个节点</Tag>
+                              <Tag color="green">{tree.edges.length} 条连接</Tag>
+                            </Space>
+                          </Space>
+                        }
+                      />
+                    </div>
+                  </div>
                 </Card>
               </List.Item>
             )}
@@ -972,8 +1058,42 @@ const MindMap = () => {
           </Space>
         }
         style={{ marginBottom: '16px' }}
+        styles={{
+          body: {
+            padding: descCollapsed ? '12px 24px' : '24px',
+          },
+        }}
       >
-        <Text type="secondary">{currentTree.description || '暂无描述'}</Text>
+        {!descCollapsed ? (
+          <div>
+            <Text type="secondary">{currentTree.description || '暂无描述'}</Text>
+            <div style={{ textAlign: 'right', marginTop: '8px' }}>
+              <Button
+                type="link"
+                size="small"
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setDescCollapsed(true)
+                }}
+              >
+                收起简介 ▲
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div style={{ textAlign: 'right' }}>
+            <Button
+              type="link"
+              size="small"
+              onClick={(e) => {
+                e.stopPropagation()
+                setDescCollapsed(false)
+              }}
+            >
+              展开简介 ▼
+            </Button>
+          </div>
+        )}
       </Card>
 
       <Card style={{ flex: 1, overflow: 'hidden' }}>

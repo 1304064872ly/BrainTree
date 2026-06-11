@@ -25,7 +25,7 @@ import { MindNode, MindEdge } from '../../types'
 import { generateId, NODE_TYPE_CONFIG, NODE_TYPE_OPTIONS, NODE_LEVEL_OPTIONS } from '../../utils'
 import { TreeNotFound, PageHeader } from '../common'
 
-const { Title, Text } = Typography
+const { Text } = Typography
 const { TextArea } = Input
 const { Option } = Select
 

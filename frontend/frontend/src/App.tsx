@@ -8,8 +8,8 @@
  * 3. 在应用启动时加载初始数据
  *
  * 布局结构：
- * - 左侧：Sidebar（可折叠侧边栏）
- * - 右侧：Content（主要内容区域）
+ * - 顶部：TopNav（顶部导航栏）
+ * - 内容：Content（主要内容区域）
  *
  * 路由配置：
  * - / → MindMap（思维图谱首页）
@@ -28,19 +28,22 @@
 // ============================================================
 import { useEffect } from 'react'                              // React Hook
 import { Routes, Route } from 'react-router-dom'               // 路由组件
-import { Layout, message } from 'antd'                         // Ant Design 组件
+import { Layout } from 'antd'                                  // Ant Design 组件
 
 // 导入页面组件
-import Sidebar from './components/Sidebar'                     // 侧边栏
-import MindMap from './components/MindMap'                     // 思维图谱
-import FileUpload from './components/FileUpload'               // 文件上传
-import NodeEditor from './components/NodeEditor'               // 节点编辑
-import Export from './components/Export'                       // 导出功能
-import Settings from './components/Settings'                   // 设置页面
+import TopNav from './components/TopNav'                        // 顶部导航栏
+import MindMap from './components/MindMap'                      // 思维图谱
+import FileUpload from './components/FileUpload'                // 文件上传
+import NodeEditor from './components/NodeEditor'                // 节点编辑
+import Export from './components/Export'                        // 导出功能
+import Settings from './components/Settings'                    // 设置页面
 
 // 导入状态管理和 API
 import { useStore } from './stores'                            // Zustand 状态管理
 import { treeApi, fileApi } from './services/api'              // API 服务
+
+// 导入全局样式
+import './global.css'
 
 // ============================================================
 // 第二部分：解构 Ant Design 组件
@@ -115,24 +118,24 @@ function App() {
 
   return (
     /**
-     * Layout 布局组件
+     * 应用背景
      *
-     * 使用 Ant Design 的 Layout 组件实现整体布局。
-     * minHeight: '100vh' 确保布局占满整个视口高度。
+     * 使用渐变背景 + 毛玻璃效果
      */
-    <Layout style={{ minHeight: '100vh' }}>
-      {/* 左侧边栏 */}
-      <Sidebar />
+    <div className="app-background" style={{ minHeight: '100vh' }}>
+      <Layout style={{ minHeight: '100vh', background: 'transparent' }}>
+        {/* 顶部导航栏 */}
+        <TopNav />
 
-      {/* 右侧内容区域 */}
-      <Layout>
-        {/*
-         * Content 内容区域
-         *
-         * padding: '24px' 添加内边距
-         * background: '#fff' 设置白色背景
-         */}
-        <Content style={{ padding: '24px', background: '#fff' }}>
+        {/* 内容区域 */}
+        <Content
+          style={{
+            padding: '24px',
+            maxWidth: '1400px',
+            margin: '0 auto',
+            width: '100%',
+          }}
+        >
           {/*
            * Routes 路由容器
            *
@@ -157,7 +160,7 @@ function App() {
           </Routes>
         </Content>
       </Layout>
-    </Layout>
+    </div>
   )
 }
 

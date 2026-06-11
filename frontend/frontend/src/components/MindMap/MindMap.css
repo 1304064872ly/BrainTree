@@ -85,7 +85,7 @@
   color: #333;
 }
 
-/* 全屏模式样式 */
+/* 全屏模式样式 - 使用 CSS 模拟全屏 */
 .mind-map-fullscreen {
   position: fixed !important;
   top: 0 !important;
@@ -95,14 +95,10 @@
   width: 100vw !important;
   height: 100vh !important;
   z-index: 9999 !important;
-  background: #fff;
+  background: #fff !important;
   padding: 16px;
   box-sizing: border-box;
   overflow: hidden;
-}
-
-.mind-map-fullscreen .mind-map-container {
-  height: 100% !important;
 }
 
 .mind-map-fullscreen .mind-map-header {

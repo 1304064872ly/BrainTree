@@ -148,10 +148,10 @@ const FileUpload = () => {
             // 成功弹窗，需要用户点击确认
             Modal.success({
               title: 'AI 分析成功',
-              content: `思维树"${response.data.name}"已生成，包含 ${response.data.nodes.length} 个节点。`,
+              content: `思维树"${response.data!.name}"已生成，包含 ${response.data!.nodes.length} 个节点。`,
               okText: '查看思维树',
               onOk: () => {
-                navigate(`/edit/${response.data.id}`)
+                navigate(`/edit/${response.data!.id}`)
               },
             })
           } else {
