@@ -50,12 +50,14 @@ DEEPSEEK_MODELS = {
 }
 
 # 配置参数 - 控制长文本分析的行为
-MAX_CONTENT_LENGTH = 80000  # 每批次最大内容长度（字符数）
-                           # 超过此长度的文本会被分段处理
-OVERLAP_LENGTH = 8000      # 批次间重叠长度（字符数）
-                           # 滑动窗口重叠，确保上下文连贯性
-MIN_SECTION_LENGTH = 500   # 最小段落长度（字符数）
-                           # 过短的段落会被合并，避免碎片化
+MAX_CONTENT_LENGTH = 120000  # 每批次最大内容长度（字符数）
+                            # 超过此长度的文本会被分段处理
+                            # 增大此值可以减少分段数量，保留更完整的语义单元
+OVERLAP_LENGTH = 15000      # 批次间重叠长度（字符数）
+                            # 滑动窗口重叠，确保上下文连贯性
+                            # 增大此值可以保持更好的上下文连贯
+MIN_SECTION_LENGTH = 500    # 最小段落长度（字符数）
+                            # 过短的段落会被合并，避免碎片化
 
 class AIAnalyzer:
     """
@@ -113,96 +115,111 @@ class AIAnalyzer:
         # 固定的分析指令前缀，与系统提示词一起构成缓存前缀
         # 只有文档内容会变化，这样可以最大化缓存命中率
         # 降低 API 调用成本并提高响应速度
-        self._analysis_instruction_prefix = """请分析以下文档内容，提取知识点并构建层级结构。
+        self._analysis_instruction_prefix = """请分析以下文档内容，提取知识点并构建知识图谱。
 
-文档结构说明：
-- 使用 # ## ### 等标题标记层级
-- # 一级标题 = 核心主题（level 1）
-- ## 二级标题 = 主要分类（level 2）
-- ### 三级标题 = 子主题（level 3）
-- 正文内容 = 详细解释（level 4）
+【任务说明】
+1. 先扫描整个文档，忽略目录、页码、页眉页脚等非内容部分
+2. 提取文档中的核心知识点，每个知识点作为一个独立的节点
+3. 知识点之间如果有逻辑关系，建立相应的连接
 
-**核心要求**：
-1. **提取所有知识点**：必须提取文档中的每一个知识点、概念、主题，不要遗漏任何一个
-2. **保留文档层级**：严格按照标题层级构建树结构
-3. **完整描述**：保留每个知识点的完整解释内容，不要省略任何细节
-4. **分类清晰**：确保每个节点有明确的父级分类
+【知识点提取规则】
+- 每个知识点应该是文档中的一个独立概念、主题或要点
+- 知识点名称应该简洁明了（10-30字）
+- 知识点描述应该包含完整详细的解释内容
+- 忽略目录、索引、参考文献等非核心内容
 
-节点类型说明：
-- concept: 核心概念/主题（level 1）
-- topic: 分类/子主题（level 2）
-- detail: 具体知识点（level 3）
-- example: 示例/代码（level 4）
-
-请以JSON格式返回：
+【输出格式】
 {
     "title": "文档主题",
     "summary": "内容摘要（200-500字）",
+    "nodes": [
+        {
+            "id": "node_1",
+            "name": "知识点名称",
+            "description": "该知识点的详细解释内容（保留原文所有细节）",
+            "level": 1
+        }
+    ],
+    "edges": [
+        {
+            "source": "node_1",
+            "target": "node_2",
+            "label": "包含/关联/依赖",
+            "type": "contains"
+        }
+    ]
+}
+
+【level 说明】
+- level 1：核心主题/大类
+- level 2：主要知识点
+- level 3：细分知识点
+- level 4：具体细节/示例
+
+【重要提示】
+- 忽略目录、页码、页眉页脚等非内容部分
+- 每个知识点的 description 必须包含完整的详细内容
+- 知识点之间的关系要有意义（包含、关联、依赖等）
+- 如果文档有 10 个核心知识点，就返回 10 个节点
+
+请直接返回JSON格式的结果，不要添加其他说明。
+
+文档内容：
+"""
+
+        # 固定的问答分析指令前缀（用于缓存命中）
+        # 注意：结尾部分（"请直接返回JSON格式的结果"）已合并到此处
+        self._qa_instruction_prefix = """请分析以下问答格式的文本内容，构建层级清晰的知识树。
+
+【核心要求】
+1. 识别主题（第一个非问/答的内容通常是主题）
+2. 将【每一个】"问：xxx"作为一个节点，节点名称就是问题内容
+3. 将对应的"答：xxx"作为该节点的详细描述
+4. 如果问题之间有逻辑关系，建立相应的关联
+
+【层级规则】
+1. 一级节点（level 1）：主题或核心问题
+2. 二级节点（level 2）：主要问题分类
+3. 三级节点（level 3）：具体问题
+4. 四级节点（level 4）：问题的细节或示例
+
+【父子关系规则】
+- 每个节点必须有且只有一个父节点（除了根节点）
+- 父节点的 level 必须比子节点小 1
+- 关系类型：只有 "contains"（包含）和 "relates"（关联）两种
+
+【输出格式】
+{
+    "title": "主题名称（必填）",
+    "summary": "内容摘要",
     "concepts": [
         {
-            "name": "知识点名称",
-            "description": "该知识点的完整解释（保留原文所有内容）",
+            "name": "问题内容（去掉问：前缀）",
+            "description": "完整的答案内容（去掉答：前缀，保留所有细节）",
             "type": "concept/topic/detail/example",
             "level": 1-4
         }
     ],
     "relations": [
         {
-            "source": "父概念",
-            "target": "子概念",
+            "source": "父节点名称",
+            "target": "子节点名称",
             "label": "包含",
             "type": "contains"
         }
     ]
 }
 
-**重要提示**：
-- 必须提取文档中的【所有】知识点，不能只提取部分
-- 每个独立的概念、主题、知识点都要作为一个单独的节点
-- 描述要完整保留原文内容，不要概括或省略
-- 如果文档有 10 个知识点，就必须返回 10 个节点
-- 节点数量应该与文档中的知识点数量一致
-
-文档内容：
-"""
-
-        # 固定的问答分析指令前缀（用于缓存命中）
-        self._qa_instruction_prefix = """请分析以下问答格式的文本内容。
-
-**核心要求**：
-1. 识别主题（第一个非问/答的内容通常是主题）
-2. 将【每一个】"问：xxx"作为一个节点，节点名称就是问题内容
-3. 将对应的"答：xxx"作为该节点的详细描述
-4. 如果问题之间有逻辑关系，建立相应的关联
-
-请以JSON格式返回结果，格式如下：
-{
-    "title": "主题名称",
-    "summary": "内容摘要",
-    "concepts": [
-        {
-            "name": "问题内容（去掉问：前缀）",
-            "description": "完整的答案内容（去掉答：前缀，保留所有细节）",
-            "type": "concept",
-            "level": 1
-        }
-    ],
-    "relations": [
-        {
-            "source": "问题1",
-            "target": "问题2",
-            "label": "相关",
-            "type": "relates"
-        }
-    ]
-}
-
-**重要提示**：
+【重要提示】
 - 必须提取【所有】问题，不能只提取部分
 - 节点名称只保留问题内容，不要包含"问："前缀
 - 描述要完整保留答案的所有内容，不要省略
 - 如果文档有 12 个问题，就必须返回 12 个节点
 - 如果问题之间有逻辑顺序或关联，建立相应的关系
+- 层级关系必须正确：父节点的 level 必须比子节点小 1
+- 每个节点必须有且只有一个父节点（除了根节点）
+
+请直接返回JSON格式的结果，不要添加其他说明。
 
 文本内容：
 """
@@ -479,14 +496,14 @@ class AIAnalyzer:
 
     def _smart_split(self, content: str) -> List[str]:
         """
-        智能分段 - 保留完整的语义单元
+        智能分段 - 按一级标题分割，保留完整的语义单元
 
-        按章节标题将文档分割成多个段落，每个段落是一个完整的语义单元。
-        这样可以确保每个批次的内容都是连贯的。
+        改进策略：只按一级标题（#）分割，而不是按所有标题分割。
+        这样可以保留完整的章节结构，避免破坏跨章节的逻辑关系。
 
         分割策略：
-        1. 检测章节标题（Markdown 标题、数字编号、中文章节标识等）
-        2. 按标题分割，每个章节作为一个独立段落
+        1. 只按一级标题（# 开头，不是 ##）分割
+        2. 每个一级标题下的所有内容（包括子标题）作为一个完整段落
         3. 如果单个章节太长，按自然段落进一步分割
         4. 合并过短的段落，避免碎片化
 
@@ -499,16 +516,15 @@ class AIAnalyzer:
         lines = content.split('\n')
         sections = []           # 存储所有分段结果
         current_section = []    # 当前正在构建的段落
-        current_heading = ''    # 当前标题
 
         for line in lines:
             stripped = line.strip()
 
-            # 检测是否是章节标题
-            is_heading, heading_level = self._detect_heading(stripped)
+            # 只按一级标题分割（# 开头，但不是 ## 或 ###）
+            is_root_heading = stripped.startswith('# ') and not stripped.startswith('## ')
 
-            if is_heading:
-                # 遇到新标题，保存当前章节
+            if is_root_heading:
+                # 遇到新的一级标题，保存当前章节
                 if current_section:
                     section_text = '\n'.join(current_section)
                     # 只保存长度足够的段落
@@ -516,29 +532,41 @@ class AIAnalyzer:
                         sections.append(section_text)
 
                 # 开始新章节
-                current_heading = stripped
                 current_section = [line]
             else:
-                # 普通内容，添加到当前章节
+                # 普通内容或子标题，添加到当前章节
                 current_section.append(line)
-
-                # 如果当前段落太长，按自然段落分割
-                current_text = '\n'.join(current_section)
-                if len(current_text) > MAX_CONTENT_LENGTH * 0.8:
-                    # 按双换行符分割（自然段落）
-                    paragraphs = current_text.split('\n\n')
-                    if len(paragraphs) > 1:
-                        # 保存前面的段落，保留最后一个继续构建
-                        for para in paragraphs[:-1]:
-                            if para.strip():
-                                sections.append(para.strip())
-                        current_section = [paragraphs[-1]]
 
         # 处理最后一个章节
         if current_section:
             section_text = '\n'.join(current_section)
             if len(section_text.strip()) >= MIN_SECTION_LENGTH:
                 sections.append(section_text)
+
+        # 如果没有一级标题，或者只有一个段落，按二级标题分割
+        if len(sections) <= 1:
+            sections = []
+            current_section = []
+
+            for line in lines:
+                stripped = line.strip()
+
+                # 按一级或二级标题分割
+                is_heading = (stripped.startswith('# ') or stripped.startswith('## ')) and not stripped.startswith('### ')
+
+                if is_heading:
+                    if current_section:
+                        section_text = '\n'.join(current_section)
+                        if len(section_text.strip()) >= MIN_SECTION_LENGTH:
+                            sections.append(section_text)
+                    current_section = [line]
+                else:
+                    current_section.append(line)
+
+            if current_section:
+                section_text = '\n'.join(current_section)
+                if len(section_text.strip()) >= MIN_SECTION_LENGTH:
+                    sections.append(section_text)
 
         # 合并过短的段落
         return self._merge_short_sections(sections)
@@ -741,7 +769,14 @@ class AIAnalyzer:
         return '\n\n'.join(reversed(overlap_parts)) if overlap_parts else ''
 
     def _merge_analysis_results(self, results: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """合并多个分析结果 - 保留所有节点"""
+        """
+        合并多个分析结果 - 使用更智能的去重和关系重建
+
+        改进策略：
+        1. 使用更精确的去重策略：基于名称 + level，而不是名称 + 描述前50字符
+        2. 重建批次间的层级关系：根据文档结构（标题层级）重建父子关系
+        3. 不再简单添加"相关内容"关系，而是根据 level 值重建层级关系
+        """
         if len(results) == 1:
             return results[0]
 
@@ -750,18 +785,18 @@ class AIAnalyzer:
         summaries = [r.get('summary', '') for r in results if r.get('summary')]
         summary = '\n\n'.join(summaries) if summaries else ''
 
-        # 合并所有概念节点 - 使用更宽松的去重策略
+        # 合并所有概念节点 - 使用更精确的去重策略
         all_concepts = []
-        seen_names = {}  # 改用字典，记录名称和描述的组合
+        seen_names = {}  # 记录名称和level的组合
         for result in results:
             for concept in result.get('concepts', []):
                 name = concept.get('name', '').strip()
                 if not name:
                     continue
 
-                # 创建唯一键：名称 + 描述前50个字符
-                desc_prefix = concept.get('description', '')[:50].strip()
-                unique_key = f"{name}|{desc_prefix}"
+                # 创建唯一键：名称 + level（更精确的去重）
+                level = concept.get('level', 1)
+                unique_key = f"{name}|{level}"
 
                 if unique_key not in seen_names:
                     seen_names[unique_key] = concept
@@ -790,25 +825,17 @@ class AIAnalyzer:
                     seen_relations.add(relation_key)
                     all_relations.append(relation)
 
-        # 如果有多个批次的结果，添加批次间的关联
+        # 如果有多个批次的结果，重建层级关系
         if len(results) > 1:
-            # 将各批次的主题节点关联起来
-            main_topics = []
-            for result in results:
-                concepts = result.get('concepts', [])
-                if concepts:
-                    # 取第一个概念作为该批次的主题
-                    main_topics.append(concepts[0].get('name', ''))
+            # 使用新的层级重建逻辑
+            hierarchy_relations = self._rebuild_hierarchy(all_concepts)
 
-            # 创建主题间的关联
-            for i in range(len(main_topics) - 1):
-                if main_topics[i] and main_topics[i + 1]:
-                    all_relations.append({
-                        "source": main_topics[i],
-                        "target": main_topics[i + 1],
-                        "label": "相关内容",
-                        "type": "relates"
-                    })
+            # 合并原有关系和新重建的关系
+            for rel in hierarchy_relations:
+                relation_key = f"{rel['source']}|{rel['target']}|{rel['label']}"
+                if relation_key not in seen_relations:
+                    seen_relations.add(relation_key)
+                    all_relations.append(rel)
 
         print(f"合并结果：共 {len(all_concepts)} 个节点，{len(all_relations)} 条关系")
 
@@ -818,6 +845,67 @@ class AIAnalyzer:
             "concepts": all_concepts,
             "relations": all_relations
         }
+
+    def _rebuild_hierarchy(self, concepts: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        根据 level 值重建层级关系
+
+        当多个批次的分析结果合并时，原有的层级关系可能丢失或混乱。
+        此方法根据节点的 level 值重新建立父子关系。
+
+        算法：
+        1. 按 level 分组
+        2. 对于每个非一级节点，找到它应该属于的父节点
+        3. 父节点选择规则：同批次中 level 比它小 1 的节点
+
+        Args:
+            concepts: 所有概念节点列表
+
+        Returns:
+            List[Dict]: 重建的层级关系列表
+        """
+        relations = []
+
+        # 按 level 分组
+        level_groups = {}
+        for concept in concepts:
+            level = concept.get('level', 1)
+            if level not in level_groups:
+                level_groups[level] = []
+            level_groups[level].append(concept)
+
+        # 获取所有存在的 level 值，排序
+        sorted_levels = sorted(level_groups.keys())
+
+        # 对于每个非一级节点，建立与上一层级节点的父子关系
+        for i in range(1, len(sorted_levels)):
+            current_level = sorted_levels[i]
+            parent_level = sorted_levels[i - 1]
+
+            # 检查 level 是否连续（跳过了某些 level）
+            if current_level - parent_level > 1:
+                # 尝试找到正确的父级 level
+                expected_parent_level = current_level - 1
+                if expected_parent_level in level_groups:
+                    parent_level = expected_parent_level
+                else:
+                    # 如果找不到正确的父级，使用最近的上一层级
+                    pass
+
+            # 为当前层级的每个节点找到父节点
+            for concept in level_groups[current_level]:
+                # 找到同批次中 level 比它小 1 的节点作为父节点
+                # 策略：选择第一个可用的父节点
+                if level_groups[parent_level]:
+                    parent = level_groups[parent_level][0]
+                    relations.append({
+                        "source": parent['name'],
+                        "target": concept['name'],
+                        "label": "包含",
+                        "type": "contains"
+                    })
+
+        return relations
 
     def extract_keywords(self, content: str, analysis_result: Dict[str, Any] = None) -> List[str]:
         """
@@ -1037,27 +1125,47 @@ class AIAnalyzer:
         Returns:
             str: 完整的提示词
 
-        Prompt Caching 优化：
+        Prompt Caching 优化（改进版）：
         - 系统提示词是固定的
-        - 分析指令前缀是固定的
-        - 只有文档内容会变化
+        - 分析指令前缀是固定的（放在最前面）
+        - 文档内容放在中间（变化的部分）
+        - 批次信息放在最后（如果有的话）
         - 这样可以最大化缓存命中率，降低 API 调用成本
+
+        为什么批次信息放在最后？
+        - DeepSeek/OpenAI 的 Prompt Caching 机制是基于前缀匹配的
+        - 相同的前缀会自动被缓存
+        - 如果批次信息放在中间，会导致前缀不一致，破坏缓存
+        - 放在最后，前缀部分保持完全一致，只有文档内容和批次信息变化
         """
         # 检测是否是问答格式（包含"问："和"答："标记）
         is_qa_format = "问：" in content and "答：" in content
 
-        # 添加上下文说明（分批分析时使用）
-        context_prefix = ""
+        # 构建批次上下文说明（放在文档内容后面，不破坏前缀缓存）
+        context_suffix = ""
         if is_part:
-            context_prefix = f"注意：以下是长文档的一部分内容。{part_info}\n请尽可能完整地提取本部分内容的知识点，不要遗漏任何重要信息。\n\n"
+            context_suffix = f"\n\n【注意：以上是长文档的一部分内容。{part_info}】\n请尽可能完整地提取本部分内容的知识点，不要遗漏任何重要信息。"
 
         # 使用固定的指令前缀（优化缓存命中）
+        # 关键改动：指令前缀和结尾固定，批次信息放在文档内容后面
+        # 这样可以最大化缓存命中率
+        #
+        # 优化后的结构：
+        # [分析指令前缀] + [文档内容] + [批次信息]
+        #
+        # 为什么这样优化？
+        # - DeepSeek/OpenAI 的 Prompt Caching 机制是基于前缀匹配的
+        # - 相同的前缀会自动被缓存
+        # - 批次信息放在文档内容后面，不会破坏前缀缓存
+        # - 固定的结尾部分已经合并到前缀中
+        #
+        # 注意：末尾的"请直接返回JSON格式的结果"已经合并到前缀中
         if is_qa_format:
             # 问答格式：使用问答专用模板
-            return f"{context_prefix}{self._qa_instruction_prefix}{content}\n\n请直接返回JSON格式的结果，不要添加其他说明。"
+            return f"{self._qa_instruction_prefix}{content}{context_suffix}"
         else:
             # 普通文档：使用通用分析模板
-            return f"{context_prefix}{self._analysis_instruction_prefix}{content}\n\n请直接返回JSON格式的结果，不要添加其他说明。"
+            return f"{self._analysis_instruction_prefix}{content}{context_suffix}"
 
     def _build_refine_prompt(self, tree: Any, feedback: str) -> str:
         """
@@ -1311,7 +1419,7 @@ class AIAnalyzer:
         调用 LLM 服务的统一入口
 
         根据配置的服务商（llm_provider）分发到对应的 API 调用方法。
-        支持的服务商：DeepSeek、OpenAI、Claude、智谱AI
+        支持的服务商：DeepSeek、OpenAI、Claude、智谱AI、小米MiMo
 
         Args:
             prompt: 发送给 AI 的提示词
@@ -1346,6 +1454,8 @@ class AIAnalyzer:
             return await self._call_claude(prompt, headers)
         elif self.llm_provider == "zhipu":
             return await self._call_zhipu(prompt, headers)
+        elif self.llm_provider == "xiaomi":
+            return await self._call_xiaomi(prompt, headers)
         else:
             raise Exception(f"不支持的LLM服务: {self.llm_provider}")
 
@@ -1557,9 +1667,63 @@ class AIAnalyzer:
             result = response.json()
             return result["choices"][0]["message"]["content"]
 
+    async def _call_xiaomi(self, prompt: str, headers: Dict) -> str:
+        """
+        调用小米 MiMo API（OpenAI 兼容格式）
+
+        小米 MiMo 使用 OpenAI 兼容的 API 格式。
+        API 地址：https://token-plan-cn.xiaomimimo.com
+
+        Args:
+            prompt: 提示词内容
+            headers: 请求头（包含认证信息）
+
+        Returns:
+            str: AI 返回的文本内容
+
+        注意：
+        - 小米 MiMo 使用 OpenAI 兼容格式，不是 Anthropic 格式
+        - 需要 Authorization: Bearer 头部
+        - 消息格式与 OpenAI API 一致
+        """
+        api_base = self.api_base or "https://token-plan-cn.xiaomimimo.com"
+        model = self.get_model("mimo-v2.5-pro")
+
+        # 小米 MiMo 使用 OpenAI 兼容格式
+        xiaomi_headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}"     # OpenAI 认证方式
+        }
+
+        # 使用固定的系统提示词可以提高 Prompt Caching 命中率
+        messages = [
+            {"role": "system", "content": self._system_prompt},  # 系统提示词（固定）
+            {"role": "user", "content": prompt}                  # 用户提示词（变化）
+        ]
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{api_base}/v1/chat/completions",  # OpenAI 兼容格式的端点
+                headers=xiaomi_headers,
+                json={
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.2,
+                    "max_tokens": 16384
+                },
+                timeout=300.0
+            )
+
+            if response.status_code != 200:
+                raise Exception(f"小米MiMo API调用失败 (模型: {model}): {response.text}")
+
+            result = response.json()
+            # OpenAI 格式返回：{"choices": [{"message": {"content": "..."}}]}
+            return result["choices"][0]["message"]["content"]
+
     def _parse_analysis_response(self, response: str) -> Dict[str, Any]:
         """
-        解析 AI 响应，提取 JSON 数据
+        解析 AI 响应，提取 JSON 数据并验证层级关系
 
         AI 返回的文本可能包含其他内容（如解释说明），
         需要从中提取 JSON 格式的分析结果。
@@ -1568,7 +1732,7 @@ class AIAnalyzer:
             response: AI 返回的原始文本
 
         Returns:
-            Dict: 解析后的 JSON 数据
+            Dict: 解析后的 JSON 数据（已验证层级关系）
 
         Raises:
             Exception: 无法提取 JSON 或 JSON 格式错误
@@ -1577,6 +1741,7 @@ class AIAnalyzer:
         1. 查找第一个 { 和最后一个 } 的位置
         2. 提取两者之间的内容
         3. 解析为 JSON 对象
+        4. 验证并修复层级关系
         """
         try:
             # 查找 JSON 的起始位置（第一个 {）
@@ -1587,11 +1752,123 @@ class AIAnalyzer:
             if json_start != -1 and json_end != -1:
                 # 提取 JSON 字符串
                 json_str = response[json_start:json_end]
-                return json.loads(json_str)
+                data = json.loads(json_str)
+
+                # 验证并修复层级关系
+                data = self._validate_hierarchy(data)
+
+                return data
             else:
                 raise Exception("无法从响应中提取JSON")
         except json.JSONDecodeError as e:
             raise Exception(f"JSON解析失败: {str(e)}")
+
+    def _validate_hierarchy(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        验证并修复层级关系
+
+        检查 AI 返回的数据中，节点的 level 值是否与父子关系一致。
+        如果不一致，自动修复 level 值。
+
+        验证规则：
+        1. 构建父子关系图
+        2. 对于每个节点，如果它有父节点，它的 level 应该是父节点 level + 1
+        3. 如果 level 不正确，自动修正
+        4. 如果所有节点都是 level 1，但有 contains 关系，则根据关系自动推断层级
+
+        Args:
+            data: AI 返回的分析结果
+
+        Returns:
+            Dict: 修复后的分析结果
+        """
+        concepts = data.get('concepts', [])
+        relations = data.get('relations', [])
+
+        if not concepts:
+            return data
+
+        # 构建父子关系图：child_name -> parent_name
+        parent_map = {}
+        for rel in relations:
+            if rel.get('type') == 'contains':
+                parent_map[rel['target']] = rel['source']
+
+        # 构建概念名称到概念的映射
+        concept_map = {c.get('name', ''): c for c in concepts}
+
+        # 检查是否所有节点都是 level 1
+        all_level_1 = all(c.get('level', 1) == 1 for c in concepts)
+
+        # 如果所有节点都是 level 1，但有 contains 关系，则根据关系自动推断层级
+        if all_level_1 and parent_map:
+            # 找到根节点（没有父节点的节点）
+            child_names = set(parent_map.keys())
+            parent_names = set(parent_map.values())
+            root_names = parent_names - child_names
+
+            # 为根节点设置 level 1
+            for concept in concepts:
+                if concept.get('name') in root_names:
+                    concept['level'] = 1
+
+            # BFS 遍历，为子节点设置正确的 level
+            queue = list(root_names)
+            visited = set(root_names)
+
+            while queue:
+                current_name = queue.pop(0)
+                current_concept = concept_map.get(current_name)
+                if not current_concept:
+                    continue
+
+                current_level = current_concept.get('level', 1)
+
+                # 找到所有子节点
+                for child_name, parent_name in parent_map.items():
+                    if parent_name == current_name and child_name not in visited:
+                        child_concept = concept_map.get(child_name)
+                        if child_concept:
+                            child_concept['level'] = current_level + 1
+                            visited.add(child_name)
+                            queue.append(child_name)
+
+        # 如果没有 contains 关系，但有 relates 关系，尝试根据顺序推断层级
+        elif not parent_map and relations:
+            # 第一个节点作为根节点（level 1）
+            if concepts:
+                concepts[0]['level'] = 1
+
+            # 根据 relates 关系的顺序，为后续节点设置递增的 level
+            # 但这可能导致不准确，所以只在没有其他信息时使用
+            pass
+
+        # 验证每个节点的 level
+        for concept in concepts:
+            name = concept.get('name', '')
+            level = concept.get('level', 1)
+
+            # 如果有父节点，level 应该是父节点 level + 1
+            if name in parent_map:
+                parent_name = parent_map[name]
+                parent_concept = concept_map.get(parent_name)
+
+                if parent_concept:
+                    expected_level = parent_concept.get('level', 1) + 1
+
+                    # 如果 level 不正确，修正它
+                    if level != expected_level:
+                        concept['level'] = expected_level
+
+        # 确保所有节点都有有效的 level（1-4）
+        for concept in concepts:
+            level = concept.get('level', 1)
+            if level < 1:
+                concept['level'] = 1
+            elif level > 4:
+                concept['level'] = 4
+
+        return data
 
     def _fallback_analysis(self, content: str) -> Dict[str, Any]:
         """

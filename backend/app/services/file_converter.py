@@ -47,13 +47,41 @@ class FileConverter:
             raise Exception(f"PDF 转换失败: {str(e)}")
 
     def _convert_pdf_with_pymupdf(self, content: bytes) -> str:
-        """使用 pymupdf 将 PDF 转换为 Markdown"""
+        """
+        使用 pymupdf 将 PDF 转换为 Markdown
+
+        改进的标题识别策略：
+        1. 数字编号标题（1.、1.1、1.1.1 等）
+        2. 中文章节标题（第一章、一、等）
+        3. 字体大小差异（作为辅助判断）
+        4. 加粗文本检测
+        """
         doc = fitz.open(stream=content, filetype="pdf")
         markdown_parts = []
 
+        # 收集所有字体大小，用于动态计算阈值
+        all_font_sizes = []
+        for page_num in range(min(5, len(doc))):  # 只分析前5页
+            page = doc[page_num]
+            blocks = page.get_text("dict")["blocks"]
+            for block in blocks:
+                if block["type"] == 0:
+                    for line in block["lines"]:
+                        for span in line["spans"]:
+                            if span["text"].strip():
+                                all_font_sizes.append(round(span["size"], 1))
+
+        # 计算字体大小阈值（使用统计方法）
+        if all_font_sizes:
+            avg_size = sum(all_font_sizes) / len(all_font_sizes)
+            # 标题字体通常比正文大 20% 以上
+            heading_threshold = avg_size * 1.2
+        else:
+            avg_size = 12
+            heading_threshold = 14
+
         for page_num in range(len(doc)):
             page = doc[page_num]
-            # 获取文本块，包含字体信息
             blocks = page.get_text("dict")["blocks"]
 
             page_lines = []
@@ -62,23 +90,70 @@ class FileConverter:
                     for line in block["lines"]:
                         text = ""
                         max_size = 0
+                        is_bold = False
+
                         for span in line["spans"]:
                             text += span["text"]
                             max_size = max(max_size, span["size"])
+                            # 检测加粗（字体名称包含 Bold 或 weight >= 700）
+                            font_name = span.get("font", "").lower()
+                            if "bold" in font_name or span.get("weight", 0) >= 700:
+                                is_bold = True
 
                         text = text.strip()
                         if not text:
                             continue
 
-                        # 根据字体大小判断标题
-                        if max_size >= 18:  # 大字体
-                            page_lines.append(f"\n# {text}\n")
-                        elif max_size >= 16:
-                            page_lines.append(f"\n## {text}\n")
-                        elif max_size >= 14:
+                        # 跳过页码、目录点号等
+                        if re.match(r'^[\d.]+$', text) or re.match(r'^.{0,5}$', text):
+                            continue
+                        if '...' in text and len(text) < 20:
+                            continue
+
+                        # ============ 标题识别策略 ============
+
+                        # 策略1：数字编号标题（最可靠）
+                        # 匹配：1.、1.1、1.1.1、1.1.1.1 等
+                        heading_level = self._detect_numbered_heading(text)
+                        if heading_level > 0:
+                            prefix = '#' * heading_level
+                            page_lines.append(f"\n{prefix} {text}\n")
+                            continue
+
+                        # 策略2：中文章节标题
+                        # 匹配：第一章、一、（一）等
+                        heading_level = self._detect_chinese_heading(text)
+                        if heading_level > 0:
+                            prefix = '#' * heading_level
+                            page_lines.append(f"\n{prefix} {text}\n")
+                            continue
+
+                        # 策略3：英文标题格式
+                        # 匹配：Chapter 1、Section 1.1 等
+                        heading_level = self._detect_english_heading(text)
+                        if heading_level > 0:
+                            prefix = '#' * heading_level
+                            page_lines.append(f"\n{prefix} {text}\n")
+                            continue
+
+                        # 策略4：字体大小 + 加粗判断
+                        if max_size >= heading_threshold:
+                            # 根据字体大小差异判断级别
+                            if max_size >= avg_size * 1.5:
+                                page_lines.append(f"\n# {text}\n")
+                            elif max_size >= avg_size * 1.3:
+                                page_lines.append(f"\n## {text}\n")
+                            elif max_size >= heading_threshold:
+                                page_lines.append(f"\n### {text}\n")
+                            continue
+
+                        # 策略5：加粗短文本（可能是小标题）
+                        if is_bold and len(text) < 50 and not text.endswith(('。', '，', '；')):
                             page_lines.append(f"\n### {text}\n")
-                        else:
-                            page_lines.append(text)
+                            continue
+
+                        # 普通文本
+                        page_lines.append(text)
 
             if page_lines:
                 markdown_parts.append('\n'.join(page_lines))
@@ -92,6 +167,124 @@ class FileConverter:
         if not result:
             return "# PDF文件\n\n*无法提取文本内容*"
         return result
+
+    def _detect_numbered_heading(self, text: str) -> int:
+        """
+        检测数字编号标题的级别
+
+        匹配规则：
+        - "1 xxx" 或 "1." → 1级标题
+        - "1.1 xxx" 或 "1.1." → 2级标题
+        - "1.1.1 xxx" 或 "1.1.1." 或 "1.1.1、" → 3级标题
+        - "1.1.1.1 xxx" → 4级标题
+
+        Returns:
+            int: 标题级别（1-4），0 表示不是标题
+        """
+        # 去除前导空格
+        text = text.strip()
+
+        # 首先尝试提取完整的编号部分（如 "2.3.1"）
+        # 使用非贪婪匹配，确保能匹配到完整的编号
+        match = re.match(r'^((?:\d+\.)+\d+)\s*(.+)', text)
+        if match:
+            number_part = match.group(1)  # 如 "2.3.1"
+            rest = match.group(2)         # 如 "HashMap 的原理" 或 ". xxx"
+
+            # 检查 rest 是否以分隔符开头
+            rest_match = re.match(r'^[\.\)）、：:]\s*(.+)', rest)
+            if rest_match:
+                content = rest_match.group(1).strip()
+            else:
+                content = rest.strip()
+
+            # 只有内容较短时才认为是标题
+            if len(content) < 80 and content:
+                # 计算级别（点号数量 + 1）
+                level = number_part.count('.') + 1
+                return min(level, 4)
+
+        # 模式2：单级数字编号（如 "1 引言" 或 "1. 引言"）
+        match = re.match(r'^(\d+)\s*[\.\)）、：:]\s*(.+)', text)
+        if match:
+            content = match.group(2).strip()
+            if len(content) < 80 and content:
+                return 1
+
+        # 模式3：单级数字 + 空格 + 文本（无分隔符）
+        match = re.match(r'^(\d+)\s+([^\d].+)', text)
+        if match:
+            content = match.group(2).strip()
+            # 确保不是普通句子（检查内容是否像标题）
+            if len(content) < 60 and not content.startswith(('的', '是', '在', '了')):
+                return 1
+
+        return 0
+
+    def _detect_chinese_heading(self, text: str) -> int:
+        """
+        检测中文章节标题的级别
+
+        匹配规则：
+        - 第一章、第二章 → 1级标题
+        - 第一节、第二节 → 2级标题
+        - 一、二、三、 → 2级标题
+        - （一）（二） → 3级标题
+
+        Returns:
+            int: 标题级别（1-3），0 表示不是标题
+        """
+        text = text.strip()
+
+        # 第X章、第X篇 → 1级
+        if re.match(r'^第[一二三四五六七八九十百千\d]+[章篇]', text):
+            return 1
+
+        # 第X节、第X部 → 2级
+        if re.match(r'^第[一二三四五六七八九十百千\d]+[节部]', text):
+            return 2
+
+        # 一、二、三、 → 2级
+        if re.match(r'^[一二三四五六七八九十]+[、．.\s]', text) and len(text) < 60:
+            return 2
+
+        # （一）（二） → 3级
+        if re.match(r'^[（\(][一二三四五六七八九十\d]+[）\)]', text):
+            return 3
+
+        return 0
+
+    def _detect_english_heading(self, text: str) -> int:
+        """
+        检测英文标题格式
+
+        匹配规则：
+        - Chapter 1、Chapter 1.1 → 1级标题
+        - Section 1.1 → 2级标题
+        - Part I → 1级标题
+
+        Returns:
+            int: 标题级别（1-2），0 表示不是标题
+        """
+        text = text.strip()
+
+        # Chapter X → 1级
+        if re.match(r'^Chapter\s+\d+', text, re.IGNORECASE):
+            return 1
+
+        # Part X → 1级
+        if re.match(r'^Part\s+[IVX\d]+', text, re.IGNORECASE):
+            return 1
+
+        # Section X.X → 2级
+        if re.match(r'^Section\s+\d+\.\d+', text, re.IGNORECASE):
+            return 2
+
+        # 全大写短文本 → 1级（可能是大标题）
+        if text.isupper() and 5 < len(text) < 60:
+            return 1
+
+        return 0
 
     def _convert_pdf_with_pypdf2(self, content: bytes) -> str:
         """使用 PyPDF2 将 PDF 转换为 Markdown"""
@@ -419,10 +612,21 @@ class FileConverter:
         return result
 
     def _convert_hierarchical_format(self, text: str, title: str, filename: str) -> str:
-        """转换有层级结构的文本"""
+        """转换有层级结构的文本 - 支持缩进格式"""
+        # 先检测并移除目录部分
+        text = self._remove_toc(text)
+
         lines = text.split('\n')
         markdown_parts = [f'# {title}\n']
 
+        # 检测是否是缩进格式（使用制表符或空格缩进）
+        has_indentation = self._detect_indentation_format(lines)
+
+        if has_indentation:
+            # 使用缩进格式转换
+            return self._convert_indented_to_markdown(text, title)
+
+        # 原有的标题检测逻辑
         for i, line in enumerate(lines):
             stripped = line.strip()
             if not stripped:
@@ -439,6 +643,171 @@ class FileConverter:
         result = '\n'.join(markdown_parts)
         result = re.sub(r'\n{3,}', '\n\n', result)
         return result
+
+    def _remove_toc(self, text: str) -> str:
+        """
+        检测并移除目录部分
+
+        目录特征：
+        1. 以"目录"、"目 录"、"Table of Contents"等开头
+        2. 包含大量页码引用（如 "......9"、"...10"）
+        3. 通常在文档开头部分
+
+        Args:
+            text: 原始文本
+
+        Returns:
+            str: 移除目录后的文本
+        """
+        lines = text.split('\n')
+        toc_end_index = 0
+        in_toc = False
+
+        # 目录标题的模式
+        toc_title_patterns = [
+            r'^目录\s*$',
+            r'^目\s*录\s*$',
+            r'^Table\s+of\s+Contents\s*$',
+            r'^TOC\s*$',
+            r'^CONTENTS\s*$',
+        ]
+
+        # 目录项的模式（包含页码引用）
+        toc_item_patterns = [
+            r'\.{3,}\s*\d+\s*$',  # ......9
+            r'…+\s*\d+\s*$',      # ……9
+            r'\s+\d+\s*$',        # 空格 + 数字（页码）
+            r'^\d+[\.\)]\s+.*\.{3,}\s*\d+\s*$',  # 1.1 标题......9
+            r'^\d+[\.\)]\s+.*\s+\d+\s*$',  # 1.1 标题 9
+            r'^\d+\.\d+[\.\)]\s+.*\.{3,}\s*\d+\s*$',  # 1.1.1 标题......9
+            r'^\d+\.\d+[\.\)]\s+.*\s+\d+\s*$',  # 1.1.1 标题 9
+        ]
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+
+            # 检测目录标题
+            if not in_toc:
+                for pattern in toc_title_patterns:
+                    if re.match(pattern, stripped, re.IGNORECASE):
+                        in_toc = True
+                        toc_end_index = i
+                        break
+                continue
+
+            # 在目录中，检测目录结束
+            if in_toc:
+                # 如果行不为空，检查是否是目录项
+                if stripped:
+                    is_toc_item = False
+                    for pattern in toc_item_patterns:
+                        if re.match(pattern, stripped):
+                            is_toc_item = True
+                            break
+
+                    # 如果不是目录项，可能是目录结束
+                    if not is_toc_item:
+                        # 检查是否是正文开始（有标题格式）
+                        if re.match(r'^第[一二三四五六七八九十百千\d]+[章篇]', stripped):
+                            toc_end_index = i
+                            break
+                        if re.match(r'^[一二三四五六七八九十]+[、．.]\s*', stripped):
+                            toc_end_index = i
+                            break
+                        # 如果连续多行都不是目录项，认为目录结束
+                        if i > toc_end_index + 5:
+                            toc_end_index = i
+                            break
+
+        # 移除目录部分
+        if in_toc and toc_end_index > 0:
+            return '\n'.join(lines[toc_end_index:])
+
+        return text
+
+    def _detect_indentation_format(self, lines: List[str]) -> bool:
+        """检测文本是否使用缩进格式表示层级"""
+        indented_count = 0
+        total_non_empty = 0
+
+        for line in lines:
+            stripped = line.strip()
+            if not stripped:
+                continue
+            total_non_empty += 1
+
+            # 检测是否有制表符缩进或多个空格缩进
+            if line.startswith('\t') or (len(line) - len(line.lstrip()) >= 2):
+                indented_count += 1
+
+        # 如果超过 30% 的行有缩进，认为是缩进格式
+        return total_non_empty > 0 and indented_count / total_non_empty > 0.3
+
+    def _convert_indented_to_markdown(self, text: str, title: str) -> str:
+        """将缩进格式的文本转换为 Markdown 标题层级"""
+        lines = text.split('\n')
+        markdown_parts = [f'# {title}\n']
+
+        # 记录每个缩进级别对应的 Markdown 标题级别
+        # 缩进级别 0 -> ## (level 2)
+        # 缩进级别 1 -> ## (level 2)
+        # 缩进级别 2 -> ### (level 3)
+        # 缩进级别 3+ -> #### (level 4)
+        indent_to_level = {}
+
+        for line in lines:
+            # 计算缩进级别
+            indent_level = self._get_indent_level(line)
+            stripped = line.strip()
+
+            if not stripped:
+                markdown_parts.append('')
+                continue
+
+            # 将缩进级别映射到 Markdown 标题级别
+            # 缩进 0-1 -> ## (level 2)
+            # 缩进 2 -> ### (level 3)
+            # 缩进 3+ -> #### (level 4)
+            if indent_level <= 1:
+                md_level = 2
+            elif indent_level == 2:
+                md_level = 3
+            else:
+                md_level = 4
+
+            # 生成 Markdown 标题
+            prefix = '#' * md_level
+            markdown_parts.append(f'\n{prefix} {stripped}\n')
+
+        result = '\n'.join(markdown_parts)
+        result = re.sub(r'\n{3,}', '\n\n', result)
+        return result
+
+    def _get_indent_level(self, line: str) -> int:
+        """获取行的缩进级别"""
+        if not line:
+            return 0
+
+        # 计算缩进级别
+        indent_level = 0
+        i = 0
+
+        while i < len(line):
+            if line[i] == '\t':
+                indent_level += 1
+                i += 1
+            elif line[i] == ' ':
+                # 连续的空格算作一个缩进级别（假设 2-4 个空格为一级）
+                space_count = 0
+                while i < len(line) and line[i] == ' ':
+                    space_count += 1
+                    i += 1
+                # 每 2 个空格算作一个缩进级别
+                indent_level += max(1, space_count // 2)
+            else:
+                break
+
+        return indent_level
 
     def _convert_list_format(self, text: str, title: str) -> str:
         """转换列表格式的文本"""

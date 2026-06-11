@@ -77,8 +77,12 @@ async def convert_file_to_markdown(converter: FileConverter, file: SourceFileDB)
     """
     将文件转换为 Markdown 格式
 
-    使用 FileConverter 将文件内容转换为结构化的 Markdown 格式，
-    以便 AI 更好地理解文档结构。
+    重要：数据库中存储的 content 字段已经是提取后的纯文本（由 file_parser 解析），
+    所以不能再当作原始 PDF/DOCX 二进制来解析，否则会得到乱码。
+
+    处理逻辑：
+    - PDF/DOCX：数据库中存储的是已提取的纯文本，直接用文本转 Markdown
+    - TXT/MD：本身就是文本，直接用文本转 Markdown
 
     Args:
         converter: 文件转换器实例
@@ -86,22 +90,23 @@ async def convert_file_to_markdown(converter: FileConverter, file: SourceFileDB)
 
     Returns:
         str: Markdown 格式的内容
-
-    注意：
-    - 如果文件内容为空，返回空字符串
-    - 如果转换失败，返回原始文本内容
     """
-    # 检查文件内容是否为空
     if not file.content:
         return ""
 
     try:
-        # 将内容编码为字节流（转换器需要字节流输入）
+        # 数据库中的 content 是 file_parser 提取的纯文本
+        # 不管原始格式是什么，现在都是纯文本，需要用文本转 Markdown
         content_bytes = file.content.encode('utf-8') if isinstance(file.content, str) else file.content
-        # 调用转换器进行转换
-        return await converter.convert_to_markdown(file.name, content_bytes)
+
+        # 关键修复：数据库中存的是已提取的文本，不是原始文件字节
+        # 对于 PDF/DOCX，用 _convert_txt_to_markdown 处理已提取的文本
+        # 而不是用 _convert_pdf_to_markdown 去解析（那需要原始 PDF 字节）
+        if file.type in ('pdf', 'docx'):
+            return converter._convert_txt_to_markdown(content_bytes, file.name)
+        else:
+            return await converter.convert_to_markdown(file.name, content_bytes)
     except Exception as e:
-        # 转换失败时，返回原始文本内容
         print(f"警告: 文件 {file.name} 转换失败: {e}")
         return file.content or ""
 
@@ -152,29 +157,42 @@ def create_tree_in_db(db: Session, tree_data: dict, file_ids: List[str],
         db_tree_file = TreeSourceFileDB(tree_id=tree_id, file_id=file_id)
         db.add(db_tree_file)
 
-    # 创建节点
-    nodes_map = {}  # 节点名称 -> 节点 ID 的映射
-    for concept in tree_data.get("concepts", []):
-        node_id = str(uuid.uuid4())
+    # 创建节点 - 兼容新旧两种格式（nodes/concepts）
+    nodes_map = {}  # 节点名称/旧ID -> 新节点 ID 的映射
+    nodes_list = tree_data.get("nodes", tree_data.get("concepts", []))
+
+    for node in nodes_list:
+        node_id = str(uuid.uuid4())  # 始终生成新的 UUID
+        node_name = node.get("name", "")
+        old_id = node.get("id", "")  # AI 返回的旧 ID
+
         db_node = MindNodeDB(
             id=node_id,
             tree_id=tree_id,
-            label=concept["name"],
-            description=concept.get("description", ""),
-            type=concept.get("type", "concept"),
-            level=concept.get("level", 1),
+            label=node_name,
+            description=node.get("description", ""),
+            type=node.get("type", "concept"),
+            level=node.get("level", 1),
             position_x=len(nodes_map) * 100,  # 简单的位置计算
             position_y=0,
-            metadata_json={"source_file": concept.get("source_file", "")}  # 记录来源文件
+            metadata_json={"source_file": node.get("source_file", "")}  # 记录来源文件
         )
         db.add(db_node)
-        nodes_map[concept["name"]] = node_id  # 记录映射关系
+        nodes_map[node_name] = node_id  # 通过名称映射
+        if old_id:
+            nodes_map[old_id] = node_id  # 通过旧 ID 映射
 
-    # 创建连接关系
-    for relation in tree_data.get("relations", []):
-        # 根据节点名称查找节点 ID
-        source_id = nodes_map.get(relation.get("source"))
-        target_id = nodes_map.get(relation.get("target"))
+    # 创建连接关系 - 兼容新旧两种格式（edges/relations）
+    edges_list = tree_data.get("edges", tree_data.get("relations", []))
+
+    for edge in edges_list:
+        # 支持两种方式：通过 id 直接引用，或通过名称查找
+        source = edge.get("source", "")
+        target = edge.get("target", "")
+
+        # 如果 source/target 是节点名称或旧 ID，转换为新节点 ID
+        source_id = nodes_map.get(source, source)
+        target_id = nodes_map.get(target, target)
 
         # 只有源节点和目标节点都存在时才创建关系
         if source_id and target_id:
@@ -183,8 +201,8 @@ def create_tree_in_db(db: Session, tree_data: dict, file_ids: List[str],
                 tree_id=tree_id,
                 source_node_id=source_id,
                 target_node_id=target_id,
-                label=relation.get("label", "相关"),
-                type=relation.get("type", "relates")
+                label=edge.get("label", "相关"),
+                type=edge.get("type", "relates")
             )
             db.add(db_edge)
 

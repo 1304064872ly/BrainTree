@@ -145,13 +145,50 @@ const FileUpload = () => {
           if (response.success && response.data) {
             // 单棵树响应
             addTree(response.data)
-            message.success('思维树生成成功！')
-            navigate(`/edit/${response.data.id}`)
+            // 成功弹窗，需要用户点击确认
+            Modal.success({
+              title: 'AI 分析成功',
+              content: `思维树"${response.data.name}"已生成，包含 ${response.data.nodes.length} 个节点。`,
+              okText: '查看思维树',
+              onOk: () => {
+                navigate(`/edit/${response.data.id}`)
+              },
+            })
           } else {
             throw new Error(response.error || '分析失败')
           }
         } catch (error: any) {
-          message.error(`AI 分析失败: ${error.message}`)
+          // 解析错误信息
+          let errorTitle = 'AI 分析失败'
+          let errorContent = error.message || '未知错误'
+
+          // 根据错误类型显示不同的提示
+          if (error.message?.includes('401') || error.message?.includes('Unauthorized')) {
+            errorTitle = 'API Key 无效'
+            errorContent = '请检查 AI 配置中的 API Key 是否正确，或是否已过期。'
+          } else if (error.message?.includes('402') || error.message?.includes('Payment')) {
+            errorTitle = '账户欠费'
+            errorContent = '您的 AI 服务账户余额不足，请先充值后再试。'
+          } else if (error.message?.includes('404') || error.message?.includes('Not Found')) {
+            errorTitle = 'API 地址错误'
+            errorContent = 'AI 服务接口不存在，请检查 API 地址配置是否正确。'
+          } else if (error.message?.includes('429') || error.message?.includes('Too Many')) {
+            errorTitle = '请求过于频繁'
+            errorContent = 'AI 服务请求频率超限，请稍后再试。'
+          } else if (error.message?.includes('500') || error.message?.includes('Internal')) {
+            errorTitle = 'AI 服务异常'
+            errorContent = 'AI 服务内部错误，请稍后再试。'
+          } else if (error.message?.includes('timeout') || error.message?.includes('超时')) {
+            errorTitle = '请求超时'
+            errorContent = 'AI 分析请求超时，可能是文档内容过长，请稍后再试。'
+          }
+
+          // 错误弹窗，需要用户点击确认
+          Modal.error({
+            title: errorTitle,
+            content: errorContent,
+            okText: '我知道了',
+          })
         } finally {
           setAnalyzing(false)
           setLoading(false)

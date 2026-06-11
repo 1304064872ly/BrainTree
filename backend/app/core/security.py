@@ -71,7 +71,7 @@ async def validate_api_key(
     支持四种 AI 服务商的 API 验证。
 
     Args:
-        provider: AI 服务商名称（deepseek/openai/claude/zhipu）
+        provider: AI 服务商名称（deepseek/openai/claude/zhipu/xiaomi）
         api_key: API 密钥
         api_base: API 基础 URL（可选，使用默认值）
         model: 模型名称（可选，使用默认值）
@@ -125,6 +125,13 @@ async def validate_api_key(
                 api_base or "https://open.bigmodel.cn/api/paas/v4",
                 api_key,
                 model or "glm-4"
+            )
+        elif provider == "xiaomi":
+            # 小米 MiMo 使用 OpenAI 兼容格式，但端点需要 /v1 前缀
+            return await _test_xiaomi(
+                api_base or "https://token-plan-cn.xiaomimimo.com",
+                api_key,
+                model or "mimo-v2.5-pro"
             )
         else:
             return {"valid": False, "message": f"不支持的服务商: {provider}"}
@@ -222,5 +229,42 @@ async def _test_claude(api_base: str, api_key: str, model: str) -> dict:
             return {"valid": True, "message": "连接成功"}
         else:
             # 提取错误信息（最多200字符）
+            error_text = response.text[:200]
+            return {"valid": False, "message": f"API 返回 {response.status_code}: {error_text}"}
+
+
+async def _test_xiaomi(api_base: str, api_key: str, model: str) -> dict:
+    """
+    测试小米 MiMo API
+
+    小米 MiMo 使用 OpenAI 兼容格式，但端点需要 /v1 前缀。
+
+    Args:
+        api_base: API 基础 URL
+        api_key: API 密钥
+        model: 模型名称
+
+    Returns:
+        dict: 验证结果
+    """
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {api_key}"
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(
+            f"{api_base}/v1/chat/completions",
+            headers=headers,
+            json={
+                "model": model,
+                "max_tokens": 5,
+                "messages": [{"role": "user", "content": "Hi"}]
+            }
+        )
+
+        if response.status_code == 200:
+            return {"valid": True, "message": "连接成功"}
+        else:
             error_text = response.text[:200]
             return {"valid": False, "message": f"API 返回 {response.status_code}: {error_text}"}

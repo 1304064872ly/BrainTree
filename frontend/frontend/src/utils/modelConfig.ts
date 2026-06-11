@@ -58,6 +58,15 @@ export const PROVIDER_CONFIGS: Record<string, ProviderConfig> = {
       { value: 'glm-4v', label: 'GLM-4V (多模态)' },
     ],
   },
+  xiaomi: {
+    name: 'xiaomi',
+    label: '小米 MiMo',
+    defaultApiBase: 'https://token-plan-cn.xiaomimimo.com',
+    models: [
+      { value: 'mimo-v2.5-pro', label: 'MiMo V2.5 Pro (高性能)' },
+      { value: 'mimo-v2.5', label: 'MiMo V2.5 (标准版)' },
+    ],
+  },
 }
 
 /** 获取服务商列表（用于下拉选择） */

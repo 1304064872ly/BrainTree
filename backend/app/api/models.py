@@ -42,6 +42,14 @@ SUPPORTED_PROVIDERS = {
             "glm-4-flash": "GLM-4 Flash",
             "glm-4v": "GLM-4V (多模态)"
         }
+    },
+    "xiaomi": {
+        "name": "小米 MiMo",
+        "base_url": "https://token-plan-cn.xiaomimimo.com/anthropic",
+        "models": {
+            "mimo-v2.5-pro": "MiMo V2.5 Pro (高性能)",
+            "mimo-v2.5": "MiMo V2.5 (标准版)"
+        }
     }
 }
 

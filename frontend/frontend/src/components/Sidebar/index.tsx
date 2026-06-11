@@ -5,13 +5,13 @@
  * 这是应用的左侧导航栏组件，负责：
  * 1. 显示应用 Logo
  * 2. 提供导航菜单
- * 3. 显示思维树列表（可删除）
+ * 3. 显示思维树列表（支持多选删除）
  * 4. 新建思维树功能
  *
  * 功能特点：
  * - 可折叠：点击收起/展开
  * - 动态菜单：根据路由高亮当前页面
- * - 思维树列表：显示所有思维树，支持删除
+ * - 思维树列表：支持多选和批量删除
  * - 新建思维树：弹出 Modal 输入名称后创建
  *
  * 布局位置：应用最左侧
@@ -27,14 +27,16 @@ import { useNavigate, useLocation } from 'react-router-dom'
 
 // Ant Design 组件
 import {
-  Layout,   // 布局
-  Menu,     // 菜单
-  Button,   // 按钮
-  Typography, // 排版
-  Space,    // 间距
-  Modal,    // 弹窗
-  Input,    // 输入框
-  message,  // 消息提示
+  Layout,       // 布局
+  Menu,         // 菜单
+  Button,       // 按钮
+  Typography,   // 排版
+  Space,        // 间距
+  Modal,        // 弹窗
+  Input,        // 输入框
+  message,      // 消息提示
+  Checkbox,     // 复选框
+  Divider,      // 分割线
 } from 'antd'
 
 // Ant Design 图标
@@ -42,10 +44,10 @@ import {
   FileOutlined,      // 文件图标
   NodeIndexOutlined, // 节点图标
   UploadOutlined,    // 上传图标
-  ExportOutlined,    // 导出图标
   PlusOutlined,      // 添加图标
   DeleteOutlined,    // 删除图标
   SettingOutlined,   // 设置图标
+  CheckSquareOutlined,  // 全选图标
 } from '@ant-design/icons'
 
 // 导入状态管理和 API
@@ -83,6 +85,9 @@ const Sidebar = () => {
   // 新建思维树名称
   const [newTreeName, setNewTreeName] = useState('')
 
+  // 多选状态：选中的思维树 ID 列表
+  const [selectedTreeIds, setSelectedTreeIds] = useState<string[]>([])
+
   // ============================================================
   // 第五部分：路由和状态
   // ============================================================
@@ -97,7 +102,85 @@ const Sidebar = () => {
   const { trees, addTree, removeTree } = useStore()
 
   // ============================================================
-  // 第六部分：菜单配置
+  // 第六部分：多选逻辑
+  // ============================================================
+
+  /**
+   * 切换选中状态
+   */
+  const toggleSelect = (treeId: string) => {
+    setSelectedTreeIds(prev =>
+      prev.includes(treeId)
+        ? prev.filter(id => id !== treeId)
+        : [...prev, treeId]
+    )
+  }
+
+  /**
+   * 全选/取消全选
+   */
+  const toggleSelectAll = () => {
+    if (selectedTreeIds.length === trees.length) {
+      // 已全选，取消全选
+      setSelectedTreeIds([])
+    } else {
+      // 全选
+      setSelectedTreeIds(trees.map(t => t.id))
+    }
+  }
+
+  /**
+   * 批量删除
+   */
+  const handleBatchDelete = () => {
+    if (selectedTreeIds.length === 0) {
+      message.warning('请先选择要删除的思维树')
+      return
+    }
+
+    const count = selectedTreeIds.length
+    const names = trees
+      .filter(t => selectedTreeIds.includes(t.id))
+      .map(t => t.name)
+      .slice(0, 3)
+      .join('、')
+
+    Modal.confirm({
+      title: '确认批量删除',
+      content: `确定要删除选中的 ${count} 个思维树吗？\n${names}${count > 3 ? '...' : ''}`,
+      okText: '删除',
+      okType: 'danger',
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          // 逐个删除
+          let successCount = 0
+          for (const treeId of selectedTreeIds) {
+            const response = await treeApi.delete(treeId)
+            if (response.success) {
+              removeTree(treeId)
+              successCount++
+            }
+          }
+
+          // 清空选中状态
+          setSelectedTreeIds([])
+
+          // 如果当前页面被删除，跳转到首页
+          if (selectedTreeIds.some(id => location.pathname === `/edit/${id}`)) {
+            navigate('/')
+          }
+
+          message.success(`成功删除 ${successCount} 个思维树`)
+        } catch (error: any) {
+          message.error(error.message || '删除失败')
+        }
+      },
+    })
+  }
+
+  // ============================================================
+  // 第七部分：菜单配置
   // ============================================================
 
   /**
@@ -123,47 +206,43 @@ const Sidebar = () => {
     {
       key: 'trees',
       icon: <FileOutlined />,
-      label: '我的思维树',
+      label: (
+        <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+          <span>我的思维树</span>
+          {!collapsed && trees.length > 0 && (
+            <Button
+              type="text"
+              size="small"
+              icon={<CheckSquareOutlined />}
+              style={{ color: '#fff' }}
+              onClick={(e) => {
+                e.stopPropagation()
+                toggleSelectAll()
+              }}
+            />
+          )}
+        </Space>
+      ),
       // 动态生成子菜单：每个思维树作为一个子菜单项
       children: trees.map((tree) => ({
         key: `/edit/${tree.id}`,
         label: (
           <Space>
-            {/* 删除按钮 */}
-            <Button
-              type="text"
-              size="small"
-              icon={<DeleteOutlined />}
+            {/* 复选框 */}
+            <Checkbox
+              checked={selectedTreeIds.includes(tree.id)}
               onClick={(e) => {
-                e.stopPropagation()  // 阻止事件冒泡（防止触发菜单点击）
-                // 显示确认删除弹窗
-                Modal.confirm({
-                  title: '确认删除',
-                  content: `确定要删除思维树"${tree.name}"吗？`,
-                  onOk: async () => {
-                    try {
-                      // 调用删除 API
-                      const response = await treeApi.delete(tree.id)
-                      if (response.success) {
-                        // 从状态中移除
-                        removeTree(tree.id)
-                        message.success('删除成功')
-                        // 如果删除的是当前编辑的树，跳转到首页
-                        if (location.pathname === `/edit/${tree.id}`) {
-                          navigate('/')
-                        }
-                      } else {
-                        message.error(response.error || '删除失败')
-                      }
-                    } catch (error: any) {
-                      message.error(error.message || '删除失败')
-                    }
-                  },
-                })
+                e.stopPropagation()
+                toggleSelect(tree.id)
               }}
             />
             {/* 思维树名称 */}
-            <span>{tree.name}</span>
+            <span
+              style={{ cursor: 'pointer' }}
+              onClick={() => navigate(`/edit/${tree.id}`)}
+            >
+              {tree.name}
+            </span>
           </Space>
         ),
       })),
@@ -177,7 +256,7 @@ const Sidebar = () => {
   ]
 
   // ============================================================
-  // 第七部分：事件处理
+  // 第八部分：事件处理
   // ============================================================
 
   /**
@@ -213,7 +292,7 @@ const Sidebar = () => {
   }
 
   // ============================================================
-  // 第八部分：渲染组件
+  // 第九部分：渲染组件
   // ============================================================
 
   return (
@@ -262,39 +341,47 @@ const Sidebar = () => {
         mode="inline"
         selectedKeys={[location.pathname]}
         items={menuItems}
-        onClick={({ key }) => navigate(key)}
+        onClick={({ key }) => {
+          // 只有当点击的不是复选框区域时才导航
+          if (!selectedTreeIds.includes(key.replace('/edit/', ''))) {
+            navigate(key)
+          }
+        }}
       />
 
       {/* ============================================================ */}
-      {/* 新建思维树按钮 */}
+      {/* 操作按钮区域 */}
       {/* ============================================================ */}
-      {/* 只在展开状态显示 */}
       {!collapsed && (
         <div style={{ padding: '16px' }}>
+          {/* 新建思维树按钮 */}
           <Button
             type="primary"
             icon={<PlusOutlined />}
-            block  // 占满宽度
+            block
             onClick={() => setIsModalOpen(true)}
+            style={{ marginBottom: '8px' }}
           >
             新建思维树
           </Button>
+
+          {/* 批量删除按钮（只有选中时显示） */}
+          {selectedTreeIds.length > 0 && (
+            <Button
+              danger
+              icon={<DeleteOutlined />}
+              block
+              onClick={handleBatchDelete}
+            >
+              删除选中 ({selectedTreeIds.length})
+            </Button>
+          )}
         </div>
       )}
 
       {/* ============================================================ */}
       {/* 新建思维树 Modal */}
       {/* ============================================================ */}
-      {/*
-       * Modal 弹窗
-       *
-       * title: 弹窗标题
-       * open: 是否显示
-       * onOk: 确认按钮回调
-       * onCancel: 取消按钮回调
-       * okText: 确认按钮文本
-       * cancelText: 取消按钮文本
-       */}
       <Modal
         title="新建思维树"
         open={isModalOpen}
@@ -306,14 +393,6 @@ const Sidebar = () => {
         okText="创建"
         cancelText="取消"
       >
-        {/*
-         * Input 输入框
-         *
-         * placeholder: 提示文本
-         * value: 输入值
-         * onChange: 输入变化回调
-         * onPressEnter: 按下回车键回调
-         */}
         <Input
           placeholder="请输入思维树名称"
           value={newTreeName}
