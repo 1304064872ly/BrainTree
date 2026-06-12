@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Upload, Button, message, List, Typography, Space, Card, Modal, Checkbox } from 'antd'
+import { Upload, Button, message, List, Typography, Space, Card, Modal, Checkbox, Switch } from 'antd'
 import {
   FilePdfOutlined,
   FileTextOutlined,
@@ -8,10 +8,14 @@ import {
   DeleteOutlined,
   InboxOutlined,
   RobotOutlined,
+  TeamOutlined,
 } from '@ant-design/icons'
 import type { UploadFile } from 'antd/es/upload/interface'
 import { useStore } from '../../stores'
 import { fileApi, analyzeApi } from '../../services/api'
+
+// 大文件阈值（10MB）
+const LARGE_FILE_THRESHOLD = 10 * 1024 * 1024
 
 const { Dragger } = Upload
 const { Title, Text } = Typography
@@ -20,6 +24,7 @@ const FileUpload = () => {
   const [fileList, setFileList] = useState<UploadFile[]>([])
   const [selectedFiles, setSelectedFiles] = useState<string[]>([])
   const [analyzing, setAnalyzing] = useState(false)
+  const [useMultiAgent, setUseMultiAgent] = useState(false)
   const { files, addFile, removeFile, addTree, setLoading, setError } = useStore()
   const navigate = useNavigate()
 
@@ -121,22 +126,69 @@ const FileUpload = () => {
     }
   }
 
+  // 检查是否有大文件
+  const checkLargeFiles = () => {
+    const selectedFileObjects = files.filter(f => selectedFiles.includes(f.id))
+    const largeFiles = selectedFileObjects.filter(f => f.size > LARGE_FILE_THRESHOLD)
+    return largeFiles
+  }
+
   const handleAnalyze = async () => {
     if (selectedFiles.length === 0) {
       message.warning('请先选择要分析的文件')
       return
     }
 
+    // 检查大文件
+    const largeFiles = checkLargeFiles()
+    const hasLargeFiles = largeFiles.length > 0
+
+    // 构建确认内容
     const fileCount = selectedFiles.length
-    const confirmContent = fileCount === 1
+    let confirmContent = fileCount === 1
       ? '确定要使用 AI 分析选中的文件吗？'
       : `确定要使用 AI 分析选中的 ${fileCount} 个文件吗？系统将自动检测文件相关性并进行智能分组分析。`
 
+    // 如果有大文件，提示用户
+    if (hasLargeFiles) {
+      const largeFileNames = largeFiles.map(f => f.name).join('、')
+      confirmContent += `\n\n⚠️ 检测到大文件（>10MB）：${largeFileNames}\n大文件分析可能需要较长时间，建议启用多 Agent 协作模式。`
+    }
+
+    // 如果有大文件，显示多 Agent 选项
+    const showMultiAgentOption = hasLargeFiles
+
     Modal.confirm({
       title: 'AI 分析',
-      content: confirmContent,
+      content: (
+        <div>
+          <p>{confirmContent}</p>
+          {showMultiAgentOption && (
+            <div style={{ marginTop: '16px', padding: '12px', background: '#f6ffed', borderRadius: '8px', border: '1px solid #b7eb8f' }}>
+              <Space>
+                <TeamOutlined style={{ color: '#52c41a' }} />
+                <Text strong>多 Agent 协作模式</Text>
+              </Space>
+              <div style={{ marginTop: '8px' }}>
+                <Text type="secondary">启用后，多个 Agent 将并行分析文档的不同部分，提高大文件分析速度。</Text>
+              </div>
+              <div style={{ marginTop: '8px' }}>
+                <Space>
+                  <Switch
+                    checked={useMultiAgent}
+                    onChange={setUseMultiAgent}
+                    size="small"
+                  />
+                  <Text>{useMultiAgent ? '已启用' : '未启用'}</Text>
+                </Space>
+              </div>
+            </div>
+          )}
+        </div>
+      ),
       okText: '开始分析',
       cancelText: '取消',
+      width: showMultiAgentOption ? 500 : 420,
       onOk: async () => {
         setAnalyzing(true)
         setLoading(true)

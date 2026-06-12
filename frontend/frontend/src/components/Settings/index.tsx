@@ -34,6 +34,7 @@ import {
   Spin,        // 加载动画
   Typography,  // 排版
   Divider,     // 分割线
+  Switch,      // 开关
 } from 'antd'
 
 // Ant Design 图标
@@ -41,6 +42,7 @@ import {
   SaveOutlined,    // 保存图标
   ApiOutlined,     // API 图标
   SettingOutlined, // 设置图标
+  TeamOutlined,    // 团队图标
 } from '@ant-design/icons'
 
 // 导入 API 服务和类型
@@ -363,6 +365,142 @@ const Settings: React.FC = () => {
                   </Option>
                 ))}
               </Select>
+            </Form.Item>
+
+            {/* ============================================================ */}
+            {/* 分割线 */}
+            {/* ============================================================ */}
+            <Divider />
+
+            {/* ============================================================ */}
+            {/* 多 Agent 配置 */}
+            {/* ============================================================ */}
+            <Form.Item
+              label={
+                <Space>
+                  <TeamOutlined />
+                  <span>多 Agent 协作</span>
+                </Space>
+              }
+            >
+              <div style={{ marginBottom: '12px' }}>
+                <Text type="secondary">
+                  启用后，大文件（大于10MB）分析时将使用多个 Agent 并行处理，提高分析速度。
+                </Text>
+              </div>
+              <Form.Item name="multiAgentEnabled" valuePropName="checked" noStyle>
+                <Switch
+                  checkedChildren="启用"
+                  unCheckedChildren="关闭"
+                />
+              </Form.Item>
+            </Form.Item>
+
+            <Form.Item
+              noStyle
+              shouldUpdate={(prevValues, curValues) => prevValues.multiAgentEnabled !== curValues.multiAgentEnabled}
+            >
+              {({ getFieldValue }) => {
+                const isEnabled = getFieldValue('multiAgentEnabled')
+                if (!isEnabled) return null
+
+                return (
+                  <Card
+                    size="small"
+                    title="Agent 模型配置"
+                    style={{ marginBottom: '16px', background: '#fafafa' }}
+                  >
+                    <Form.Item
+                      label="Agent 数量"
+                      name="multiAgentCount"
+                      tooltip="建议 2-4 个，过多可能增加 API 调用成本"
+                    >
+                      <Select>
+                        <Option value={2}>2 个 Agent</Option>
+                        <Option value={3}>3 个 Agent</Option>
+                        <Option value={4}>4 个 Agent</Option>
+                      </Select>
+                    </Form.Item>
+
+                    <Form.Item
+                      noStyle
+                      shouldUpdate={(prevValues, curValues) => prevValues.multiAgentCount !== curValues.multiAgentCount}
+                    >
+                      {({ getFieldValue: getCount }) => {
+                        const agentCount = getCount('multiAgentCount') || 2
+                        return (
+                          <div>
+                            {Array.from({ length: agentCount }, (_, i) => (
+                              <Card
+                                key={i}
+                                size="small"
+                                title={`Agent ${i + 1}`}
+                                style={{ marginBottom: '8px' }}
+                                extra={
+                                  <Text type="secondary" style={{ fontSize: '12px' }}>
+                                    {i === 0 ? '主分析' : i === 1 ? '结构提取' : i === 2 ? '关系分析' : '验证优化'}
+                                  </Text>
+                                }
+                              >
+                                <Space direction="vertical" style={{ width: '100%' }}>
+                                  <Form.Item
+                                    label="服务商"
+                                    name={['agentConfigs', i, 'provider']}
+                                    initialValue="deepseek"
+                                    style={{ marginBottom: '8px' }}
+                                  >
+                                    <Select
+                                      onChange={(value) => {
+                                        // 切换服务商时更新模型列表
+                                        const models = getModelOptions(value)
+                                        if (models.length > 0) {
+                                          form.setFieldValue(['agentConfigs', i, 'model'], models[0].value)
+                                        }
+                                        // 更新 API Base
+                                        form.setFieldValue(['agentConfigs', i, 'apiBase'], getDefaultApiBase(value))
+                                      }}
+                                    >
+                                      {getProviderOptions().map(provider => (
+                                        <Option key={provider.value} value={provider.value}>
+                                          {provider.label}
+                                        </Option>
+                                      ))}
+                                    </Select>
+                                  </Form.Item>
+
+                                  <Form.Item
+                                    label="模型"
+                                    name={['agentConfigs', i, 'model']}
+                                    style={{ marginBottom: '8px' }}
+                                  >
+                                    <Select>
+                                      {getModelOptions(
+                                        form.getFieldValue(['agentConfigs', i, 'provider']) || 'deepseek'
+                                      ).map(model => (
+                                        <Option key={model.value} value={model.value}>
+                                          {model.label}
+                                        </Option>
+                                      ))}
+                                    </Select>
+                                  </Form.Item>
+
+                                  <Form.Item
+                                    label="API Key"
+                                    name={['agentConfigs', i, 'apiKey']}
+                                    style={{ marginBottom: '0' }}
+                                  >
+                                    <Input.Password placeholder="留空则使用主配置的 API Key" />
+                                  </Form.Item>
+                                </Space>
+                              </Card>
+                            ))}
+                          </div>
+                        )
+                      }}
+                    </Form.Item>
+                  </Card>
+                )
+              }}
             </Form.Item>
 
             {/* ============================================================ */}
